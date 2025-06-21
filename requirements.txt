@@ -1,6 +1,7 @@
+solana
 solders
 python-dotenv
 google-generativeai
 borsh
 websockets
-httpx
+httpx # Still useful for general HTTP calls (e.g., fetching URI content)
