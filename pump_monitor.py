@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version, MessageV0 Import Fix)
+# pump_monitor.py (Full Code - Latest Version with Syntax Error Fix - Version 2)
 
 import asyncio
 import json
@@ -7,9 +7,7 @@ import websockets # Core library for WebSocket connections
 import websockets.exceptions 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
-# CORRECTED: Import MessageV0 from solders.message
-from solders.transaction import Transaction, VersionedTransaction
-from solders.message import MessageV0 # Corrected import path for MessageV0
+from solders.transaction import Transaction, VersionedTransaction, MessageV0
 from solders.instruction import Instruction, AccountMeta
 from solders.system_program import ID as SYSTEM_PROGRAM_ID
 from solders.token.program import ID as TOKEN_PROGRAM_ID
@@ -18,8 +16,8 @@ from spl.token.client import get_associated_token_address # This is from solana-
 from dotenv import load_dotenv
 import os
 import borsh
-import httpx 
-import google.generativeai as genai
+import httpx # For general HTTP requests (e.g., to fetch token metadata from URI)
+import google.generativeai as genai # Import Google Gemini AI library
 from solana.rpc.api import Client as SolanaRpcClient
 from solana.rpc.commitment import Confirmed
 from solana.rpc.types import TxOpts 
@@ -33,8 +31,8 @@ WSS_URL = os.getenv("SOLANA_WSS_URL")
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-BUY_SOL_AMOUNT = float(os.getenv("BUY_SOL_AMOUNT", "0.001"))
-BUY_SLIPPAGE_BPS = int(os.getenv("BUY_SLIPPAGE_BPS", "500"))
+BUY_SOL_AMOUNT = float(os.getenv("BUY_SOL_AMOUNT", "0.001")) # Default to 0.001 SOL if not set
+BUY_SLIPPAGE_BPS = int(os.getenv("BUY_SLIPPAGE_BPS", "500")) # Default 500 bps (0.5%)
 
 # --- Basic Validation of .env variables ---
 if not WSS_URL:
@@ -58,10 +56,12 @@ if not (0 <= BUY_SLIPPAGE_BPS <= 10000):
 
 # Configure Google Gemini AI
 genai.configure(api_key=GEMINI_API_KEY)
+# Initialize the generative model
 gemini_model = genai.GenerativeModel('gemini-pro')
 
-general_http_client = httpx.AsyncClient()
-solana_rpc_client = SolanaRpcClient(HTTP_URL)
+# Initialize HTTP clients
+general_http_client = httpx.AsyncClient() # For non-Solana specific HTTP requests (e.g., fetching URI metadata)
+solana_rpc_client = SolanaRpcClient(HTTP_URL) # For Solana RPC calls (e.g., get_latest_blockhash, send_transaction)
 
 
 try:
@@ -76,7 +76,8 @@ except Exception as e:
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID) 
 
-BUY_INSTRUCTION_DISCRIMINATOR = bytes([160, 219, 137, 240, 116, 219, 237, 201])
+# Pump.fun Instruction Discriminators (from pump-fun.json IDL - SHA256 of instruction name)
+BUY_INSTRUCTION_DISCRIMINATOR = bytes([160, 219, 137, 240, 116, 219, 237, 201]) # SHA256 of "global:buy" truncated to 8 bytes
 
 CREATE_INSTRUCTION_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
 
@@ -180,7 +181,6 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
 
     # 2. Get latest blockhash for transaction
     try:
-        # solana_rpc_client methods are synchronous, so use asyncio.to_thread
         recent_blockhash_resp = await asyncio.to_thread(solana_rpc_client.get_latest_blockhash)
         recent_blockhash = recent_blockhash_resp.value.blockhash
         last_valid_block_height = recent_blockhash_resp.value.last_valid_block_height
@@ -194,7 +194,6 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
     buy_instruction_data = BUY_INSTRUCTION_DISCRIMINATOR + buy_instruction_payload
 
     # 4. Construct the instruction (AccountMeta list based on IDL order)
-    # The order of these accounts is CRUCIAL and must match the Pump.fun program's IDL for the 'buy' instruction.
     buy_keys = [
         AccountMeta(pubkey=global_pubkey, is_signer=False, is_writable=True), # 0. global
         AccountMeta(pubkey=bonding_curve_pubkey, is_signer=False, is_writable=True), # 1. bonding_curve
@@ -232,7 +231,6 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
         )
         print(f"Sending buy transaction for {token_mint}...")
         
-        # Use asyncio.to_thread for the synchronous RPC call
         response = await asyncio.to_thread(solana_rpc_client.send_versioned_transaction, transaction, opts=opts)
         
         tx_signature = response.value
@@ -244,9 +242,9 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
                 solana_rpc_client.confirm_transaction,
                 tx_signature,
                 commitment=Confirmed,
-                last_valid_block_height=last_valid_block_height # Use the height from blockhash
+                last_valid_block_height=last_valid_block_height
             )
-            if confirmation_response.value.value: # .value.value indicates success/failure object
+            if confirmation_response.value.value:
                 if confirmation_response.value.value.err is None:
                     print(f"Transaction {tx_signature} confirmed successfully!")
                     return tx_signature
@@ -274,6 +272,7 @@ async def pump_fun_listener():
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     Integrates Gemini AI for token analysis and includes a placeholder for buy actions.
     """
+    # Consolidate all connection-related errors into one try-except block
     try:
         async with websockets.connect(WSS_URL) as ws:
             subscribe_request = {
@@ -289,37 +288,21 @@ async def pump_fun_listener():
             await ws.send(json.dumps(subscribe_request))
             print(f"Sent subscription request: {json.dumps(subscribe_request)}")
 
-            try:
-                print(f"Awaiting first response (expecting subscription ID or error from RPC)...")
-                first_response_raw = await ws.recv() # Get raw string
-                print(f"Received first response (raw): {first_response_raw}")
+            # Handle initial response for subscription ID or RPC error
+            first_response_raw = await ws.recv() # Get raw string
+            print(f"Received first response (raw): {first_response_raw}")
 
-                parsed_first_response = json.loads(first_response_raw)
-                if 'result' in parsed_first_response and 'id' in parsed_first_response:
-                    subscription_id = parsed_first_response['result']
-                    print(f"Successfully subscribed with ID: {subscription_id}")
-                elif 'error' in parsed_first_response:
-                    print(f"ERROR: RPC returned an error in first response: {parsed_first_response['error']}")
-                    raise Exception(f"RPC Error during subscription: {parsed_first_response['error']}")
-                else:
-                    print(f"Warning: Unexpected first response structure: {parsed_first_response}")
-                    raise Exception(f"Unexpected first response: {parsed_first_response}")
-
-            except websockets.exceptions.ConnectionClosedOK as e:
-                print(f"ERROR: WebSocket connection closed gracefully (OK): {e}")
-                print(f"Code: {e.code}, Reason: {e.reason}")
-                return
-            except websockets.exceptions.ConnectionClosedError as e:
-                print(f"CRITICAL ERROR: WebSocket connection closed abnormally: {e}")
-                print(f"Code: {e.code}, Reason: {e.reason}")
-                return
-            except json.JSONDecodeError as e:
-                print(f"CRITICAL ERROR: Could not decode WebSocket message as JSON: {e}")
-                return
-            except Exception as e:
-                print(f"CRITICAL ERROR: An unexpected error occurred during initial subscription handshake: {e}")
-                return
-
+            parsed_first_response = json.loads(first_response_raw)
+            if 'result' in parsed_first_response and 'id' in parsed_first_response:
+                subscription_id = parsed_first_response['result']
+                print(f"Successfully subscribed with ID: {subscription_id}")
+            elif 'error' in parsed_first_response:
+                print(f"ERROR: RPC returned an error in first response: {parsed_first_response['error']}")
+                # Re-raise the error so the outer `try-except` in __main__ catches it
+                raise Exception(f"RPC Error during subscription: {parsed_first_response['error']}")
+            else:
+                print(f"Warning: Unexpected first response structure: {parsed_first_response}")
+                raise Exception(f"Unexpected first response: {parsed_first_response}")
 
             print("Waiting for new token creations (filtering in Python)...")
 
@@ -403,6 +386,17 @@ async def pump_fun_listener():
                         except Exception as e:
                             print(f"An unexpected error occurred during processing for signature {signature}: {e}")
                             print(f"Problematic base64 data: {program_data_log_content}")
+    except websockets.exceptions.ConnectionClosedOK as e:
+        print(f"ERROR: WebSocket connection closed gracefully (OK): {e}")
+        print(f"Code: {e.code}, Reason: {e.reason}")
+    except websockets.exceptions.ConnectionClosedError as e:
+        print(f"CRITICAL ERROR: WebSocket connection closed abnormally: {e}")
+        print(f"Code: {e.code}, Reason: {e.reason}")
+    except json.JSONDecodeError as e:
+        print(f"CRITICAL ERROR: Could not decode WebSocket message as JSON: {e}")
+    except Exception as e:
+        print(f"CRITICAL ERROR: An unhandled exception occurred in the pump_fun_listener: {e}")
+
 
 # Main entry point for the asyncio event loop
 if __name__ == "__main__":
