@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Raw WebSocket Send for Logs Subscribe)
+# pump_monitor.py (Full Code - Latest Version with Debugging First WebSocket Response)
 
 import asyncio
 import json
@@ -91,7 +91,6 @@ async def pump_fun_listener():
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Manually construct and send the JSON-RPC subscribe request ---
         subscribe_request = {
             "jsonrpc": "2.0",
             "id": 1, # A unique ID for your subscription
@@ -102,12 +101,15 @@ async def pump_fun_listener():
             ]
         }
         
-        # Send the JSON-RPC request as a string
         await ws.send(json.dumps(subscribe_request))
         print(f"Sent subscription request: {json.dumps(subscribe_request)}")
 
-        # Wait for the initial subscription confirmation message
+        # --- NEW DEBUGGING PRINT ---
+        print(f"Awaiting first response...")
         first_response = await ws.recv()
+        print(f"Received first response (raw): {first_response}")
+        # --- END NEW DEBUGGING PRINT ---
+
         try:
             parsed_first_response = json.loads(first_response)
             if 'result' in parsed_first_response and 'id' in parsed_first_response:
@@ -115,9 +117,14 @@ async def pump_fun_listener():
                 print(f"Successfully subscribed with ID: {subscription_id}")
             else:
                 print(f"Warning: Unexpected first response structure: {parsed_first_response}")
-        except json.JSONDecodeError:
-            print(f"Warning: Could not decode first response as JSON: {first_response}")
-            print("This might be a raw message, not a JSON-RPC response.")
+        except json.JSONDecodeError as e: # Catch JSONDecodeError specifically for more detail
+            print(f"CRITICAL ERROR: Could not decode first response as JSON: {e}")
+            print(f"Problematic raw response: {first_response}")
+            raise # Re-raise to stop execution and show the full traceback
+        except Exception as e: # Catch any other unexpected errors
+            print(f"CRITICAL ERROR: An unexpected error occurred parsing first response: {e}")
+            raise
+
 
         print("Waiting for new token creations on Mainnet (filtering in Python)...")
 
@@ -125,7 +132,8 @@ async def pump_fun_listener():
             try:
                 msg = json.loads(msg_str)
             except json.JSONDecodeError:
-                print(f"Warning: Received non-JSON message: {msg_str[:100]}...") # Print first 100 chars
+                # This is common for keep-alive pings or non-JSON messages
+                # print(f"Warning: Received non-JSON message: {msg_str[:100]}...")
                 continue # Skip to the next message if it's not JSON
 
             if 'params' in msg and 'result' in msg['params'] and 'value' in msg['params']['result']:
@@ -134,7 +142,6 @@ async def pump_fun_listener():
                 logs = log_data.get('logs', [])
                 
                 # Even with RPC filtering (if it works), do an in-Python check for robustness
-                # The RPC filter might send some unrelated logs sometimes
                 account_keys_str = log_data.get('accountKeys', [])
                 if PUMPFUN_PROGRAM_ID_STR not in account_keys_str:
                     continue
