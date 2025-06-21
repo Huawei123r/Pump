@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with pump-fun.json fix)
+# pump_monitor.py (Full Code - Latest Version with IDL Debugging)
 
 import asyncio
 import json
@@ -64,15 +64,35 @@ try:
     # *** MODIFICATION HERE: Using "pump-fun.json" as per your file system ***
     with Path("pump-fun.json").open() as f:
         raw_idl = f.read()
-    pump_fun_idl = Idl.from_json(raw_idl)
-    # We create a dummy Program instance just for its coder to decode logs
-    # No provider/connection needed for decoding only
-    pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
+
+    # --- TEMPORARY DEBUGGING CODE ---
+    # Parse the raw JSON string to a Python dict to inspect it
+    temp_idl_dict = json.loads(raw_idl)
+    
+    # Try to extract the 'create' instruction's accounts
+    create_instruction_accounts = None
+    for instr in temp_idl_dict.get('instructions', []):
+        if instr.get('name') == 'create':
+            create_instruction_accounts = instr.get('accounts')
+            break
+            
+    if create_instruction_accounts:
+        print("\n--- DEBUG: 'create' instruction accounts from raw_idl ---")
+        # Print the first few accounts from the 'create' instruction
+        for i, account in enumerate(create_instruction_accounts[:5]): # Print first 5 accounts
+            print(f"Account {i}: {json.dumps(account, indent=2)}")
+        print("--- END DEBUG ---\n")
+    else:
+        print("\n--- DEBUG: 'create' instruction not found in IDL or no accounts ---")
+    # --- END TEMPORARY DEBUGGING CODE ---
+
+
+    pump_fun_idl = Idl.from_json(raw_idl) # This line will still cause the error if the IDL is bad
     print("Pump.fun IDL loaded successfully for decoding.")
 except FileNotFoundError:
     print("CRITICAL ERROR: pump-fun.json not found.")
     print("Please ensure 'pump-fun.json' is in the same directory as this script.")
-    print("You downloaded it from: https://github.com/rckprtr/pumpdotfun-sdk/blob/main/src/IDL/pump-fun.json (click Raw and save)")
+    print("You downloaded it from: https://raw.githubusercontent.com/rckprtr/pumpdotfun-sdk/main/src/IDL/pump-fun.json (click Raw and save)")
     exit()
 except Exception as e:
     print(f"CRITICAL ERROR: Error loading or parsing Pump.fun IDL: {e}")
@@ -173,9 +193,10 @@ async def pump_fun_listener():
                                     print(f"**Extracted Creator Address:** {creator_address}")
 
                                     # You can also get other data from decoded_instruction.data, e.g.:
-                                    # token_name = decoded_instruction.data.name
-                                    # token_symbol = decoded_instruction.data.symbol
-                                    # print(f"Token Name: {token_name}, Symbol: {token_symbol}")
+                                    token_name = decoded_instruction.data.name
+                                    token_symbol = decoded_instruction.data.symbol
+                                    token_uri = decoded_instruction.data.uri
+                                    print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
                                     
                                 else:
                                     print("Warning: Could not reliably extract new token mint or creator address from accountKeys.")
@@ -190,7 +211,7 @@ async def pump_fun_listener():
                                 #    This will involve using your `wallet_keypair` and `http_client` to send a transaction.
                                 # 4. Implement selling logic based on your basic strategy (e.g., fixed profit/loss).
 
-                                print(f"Proceeding to AI assessment and trading decision for {new_token_mint}...")
+                                print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
 
                             else:
                                 print(f"Instruction decoded, but it's not the expected 'create' instruction or data is malformed for signature: {signature}")
@@ -208,3 +229,4 @@ if __name__ == "__main__":
         print("\nListener stopped by user (KeyboardInterrupt).")
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")
+
