@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Compact JSON Dump)
+# pump_monitor.py (Full Code - Latest Version with Indented JSON Dump)
 
 import asyncio
 import json
@@ -74,9 +74,9 @@ try:
             elif 'isSigner' not in account:
                 account['isSigner'] = False
             
-            if 'isMut' not in account: # Ensure always set
+            if 'isMut' not in account:
                 account['isMut'] = False
-            if 'isSigner' not in account: # Ensure always set
+            if 'isSigner' not in account:
                 account['isSigner'] = False
 
     for global_account_def in idl_dict_to_patch.get('accounts', []):
@@ -86,15 +86,9 @@ try:
             global_account_def['isSigner'] = False
     # --- END PATCHING LOGIC ---
 
-    # --- DEEP DEBUGGING: Print the entire patched IDL dictionary before Idl.from_json ---
-    # Temporarily remove this for now, as it prints a lot and might be confusing
-    # print("\n--- DEEP DEBUG: Full Patched IDL Dictionary (before Idl.from_json) ---")
-    # print(json.dumps(idl_dict_to_patch, indent=2))
-    # print("--- END DEEP DEBUG ---\n")
-
-    # Convert the patched dictionary back to an Idl object using compact JSON
-    # This is the crucial line being modified
-    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch, separators=(',', ':'))) # Use separators for compact JSON
+    # Convert the patched dictionary back to an Idl object using indented JSON
+    # This is the crucial line being modified again
+    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch, indent=2)) # Use indent for multi-line JSON
     pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
     print("Pump.fun IDL loaded and patched successfully for decoding.")
 except FileNotFoundError:
@@ -104,11 +98,10 @@ except FileNotFoundError:
     exit()
 except Exception as e:
     print(f"CRITICAL ERROR: Error loading, patching, or parsing Pump.fun IDL: {e}")
+    # Print the full problematic dictionary content if it fails here
     if idl_dict_to_patch:
-        print("\n--- DEBUG: Problematic IDL Dictionary content (partial, if available) ---")
-        # Print the problematic part explicitly if available
-        # You might need to manually inspect the file on your server if this still fails
-        print(json.dumps(idl_dict_to_patch, indent=2)[300:600]) # Focused snippet
+        print("\n--- DEBUG: Problematic IDL Dictionary content (full, if available) ---")
+        print(json.dumps(idl_dict_to_patch, indent=2))
         print("--- END DEBUG ---\n")
     exit()
 
