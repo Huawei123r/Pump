@@ -1,12 +1,10 @@
-# pump_monitor.py (Full Code - Latest Version with BUY_SOL_AMOUNT and httpx.AsyncClient)
+# pump_monitor.py (Full Code - Latest Version with Syntax Error Fix)
 
 import asyncio
 import json
 import base64
 import websockets # Core library for WebSocket connections
 import websockets.exceptions 
-# REMOVED: from solana.rpc.websocket_api import connect (replaced by websockets)
-# REMOVED: from solana.rpc.api import Client (replaced by httpx)
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
@@ -24,7 +22,6 @@ WSS_URL = os.getenv("SOLANA_WSS_URL")
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# NEW: Load BUY_SOL_AMOUNT from .env
 BUY_SOL_AMOUNT = float(os.getenv("BUY_SOL_AMOUNT", "0.001")) # Default to 0.001 SOL if not set
 
 # --- Basic Validation of .env variables ---
@@ -51,7 +48,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-pro') # Using gemini-pro for text tasks
 
 # Initialize an asynchronous HTTP client for fetching external data
-http_client = httpx.AsyncClient() # Changed to AsyncClient for async operations
+http_client = httpx.AsyncClient()
 
 
 try:
@@ -165,6 +162,7 @@ async def pump_fun_listener():
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     Integrates Gemini AI for token analysis and includes a placeholder for buy actions.
     """
+    # Consolidate all connection-related errors into one try-except block
     try:
         async with websockets.connect(WSS_URL) as ws:
             subscribe_request = {
@@ -172,7 +170,7 @@ async def pump_fun_listener():
                 "id": 1, 
                 "method": "logsSubscribe",
                 "params": [
-                    {"mentions": [PUMPFUN_PROGRAM_ID_STR]},
+                    {"mentions": [PUMPFUN_PROGRAM_ID_STR]}, # Filter by Pump.fun program ID as a string
                     {"commitment": "confirmed"}
                 ]
             }
@@ -180,38 +178,21 @@ async def pump_fun_listener():
             await ws.send(json.dumps(subscribe_request))
             print(f"Sent subscription request: {json.dumps(subscribe_request)}")
 
-            try:
-                print(f"Awaiting first response (expecting subscription ID or error from RPC)...")
-                first_response_raw = await ws.recv()
-                print(f"Received first response (raw): {first_response_raw}")
+            # Handle initial response
+            first_response_raw = await ws.recv() # Get raw string
+            print(f"Received first response (raw): {first_response_raw}")
 
-                parsed_first_response = json.loads(first_response_raw)
-                if 'result' in parsed_first_response and 'id' in parsed_first_response:
-                    subscription_id = parsed_first_response['result']
-                    print(f"Successfully subscribed with ID: {subscription_id}")
-                elif 'error' in parsed_first_response:
-                    print(f"ERROR: RPC returned an error in first response: {parsed_first_response['error']}")
-                    raise Exception(f"RPC Error: {parsed_first_response['error']}")
-                else:
-                    print(f"Warning: Unexpected first response structure: {parsed_first_response}")
-                    raise Exception(f"Unexpected first response: {parsed_first_response}")
-
-            except websockets.exceptions.ConnectionClosedOK as e:
-                print(f"ERROR: WebSocket connection closed gracefully (OK): {e}")
-                print(f"Code: {e.code}, Reason: {e.reason}")
-                return
-            except websockets.exceptions.ConnectionClosedError as e:
-                print(f"CRITICAL ERROR: WebSocket connection closed abnormally: {e}")
-                print(f"Code: {e.code}, Reason: {e.reason}")
-                return
-            except json.JSONDecodeError as e:
-                print(f"CRITICAL ERROR: Could not decode first response as JSON: {e}")
-                print(f"Problematic raw response: {first_response_raw}")
-                return
-            except Exception as e:
-                print(f"CRITICAL ERROR: An unexpected error occurred during initial subscription handshake: {e}")
-                return
-
+            parsed_first_response = json.loads(first_response_raw)
+            if 'result' in parsed_first_response and 'id' in parsed_first_response:
+                subscription_id = parsed_first_response['result']
+                print(f"Successfully subscribed with ID: {subscription_id}")
+            elif 'error' in parsed_first_response:
+                print(f"ERROR: RPC returned an error in first response: {parsed_first_response['error']}")
+                # Re-raise the error so the outer `try-except` in __main__ catches it
+                raise Exception(f"RPC Error during subscription: {parsed_first_response['error']}")
+            else:
+                print(f"Warning: Unexpected first response structure: {parsed_first_response}")
+                raise Exception(f"Unexpected first response: {parsed_first_response}")
 
             print("Waiting for new token creations (filtering in Python)...")
 
@@ -279,7 +260,6 @@ async def pump_fun_listener():
                                 # This is where you'd decide whether to buy based on AI assessment
                                 if "Positive" in ai_assessment: # Example condition
                                     print(f"AI assessment for {token_symbol} is Positive. Initiating simulated buy...")
-                                    # Call the placeholder buy function
                                     await execute_buy_trade(new_token_mint, BUY_SOL_AMOUNT, wallet_keypair)
                                 else:
                                     print(f"AI assessment for {token_symbol} is not Positive. Skipping buy.")
@@ -296,6 +276,17 @@ async def pump_fun_listener():
                         except Exception as e:
                             print(f"An unexpected error occurred during processing for signature {signature}: {e}")
                             print(f"Problematic base64 data: {program_data_log_content}")
+    except websockets.exceptions.ConnectionClosedOK as e:
+        print(f"ERROR: WebSocket connection closed gracefully (OK): {e}")
+        print(f"Code: {e.code}, Reason: {e.reason}")
+    except websockets.exceptions.ConnectionClosedError as e:
+        print(f"CRITICAL ERROR: WebSocket connection closed abnormally: {e}")
+        print(f"Code: {e.code}, Reason: {e.reason}")
+    except json.JSONDecodeError as e:
+        print(f"CRITICAL ERROR: Could not decode WebSocket message as JSON: {e}")
+    except Exception as e:
+        print(f"CRITICAL ERROR: An unhandled exception occurred in the pump_fun_listener: {e}")
+
 
 # Main entry point for the asyncio event loop
 if __name__ == "__main__":
