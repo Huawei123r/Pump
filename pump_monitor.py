@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version, TOKEN_PROGRAM_ID Import Fix)
+# pump_monitor.py (Full Code - Latest Version, TOKEN_PROGRAM_ID as Constant Pubkey Fix)
 
 import asyncio
 import json
@@ -11,8 +11,7 @@ from solders.transaction import Transaction, VersionedTransaction
 from solders.message import MessageV0
 from solders.instruction import Instruction, AccountMeta
 from solders.system_program import ID as SYSTEM_PROGRAM_ID
-# CORRECTED: Import TOKEN_PROGRAM_ID from spl.token.program_id
-from spl.token.program_id import PROGRAM_ID as TOKEN_PROGRAM_ID # Corrected import path for TOKEN_PROGRAM_ID
+# REMOVED: from spl.token.program_id import PROGRAM_ID as TOKEN_PROGRAM_ID # Removed problematic import
 from spl.token.client import get_associated_token_address # This is from solana-py's spl library
 
 from dotenv import load_dotenv
@@ -77,6 +76,9 @@ except Exception as e:
 
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID) 
+
+# Define TOKEN_PROGRAM_ID as a constant Pubkey
+TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 
 # Pump.fun Instruction Discriminators (from pump-fun.json IDL - SHA256 of instruction name)
 BUY_INSTRUCTION_DISCRIMINATOR = bytes([160, 219, 137, 240, 116, 219, 237, 201]) # SHA256 of "global:buy" truncated to 8 bytes
