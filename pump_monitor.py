@@ -1,27 +1,25 @@
-# pump_monitor.py (Full Code - Latest Version, Switching to Mainnet)
+# pump_monitor.py (Full Code - Latest Version with Gemini AI Integration)
 
 import asyncio
 import json
 import base64
-import websockets # Import the raw websockets library
+import websockets # Core library for WebSocket connections
 import websockets.exceptions 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# We will re-add solana.rpc.api.Client for HTTP requests later as needed.
-# For now, stick to raw websockets for the listener.
+import httpx # For general HTTP requests (e.g., to fetch token metadata from URI, or interact with RPC via HTTP)
+import google.generativeai as genai # NEW: Import Google Gemini AI library
 
 from pathlib import Path
 
 # --- Configuration ---
 load_dotenv()
 
-# --- Revert to Mainnet URLs from .env ---
 WSS_URL = os.getenv("SOLANA_WSS_URL")
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
-
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -38,13 +36,13 @@ if not GEMINI_API_KEY:
     print("CRITICAL ERROR: GEMINI_API_KEY not found in .env. Exiting.")
     exit()
 
+# Configure Google Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+# Initialize the generative model
+gemini_model = genai.GenerativeModel('gemini-pro') # Using gemini-pro for text tasks
 
-# We will need an HTTP client for fetching balances, etc. Let's re-add httpx for general HTTP requests
-# Since we removed solana.rpc.api.Client, we need a generic one.
-import httpx # NEW: Import httpx for general HTTP requests
-
-# Initialize a generic HTTP client
-http_client = httpx.Client() # Use httpx for regular HTTP requests
+# Initialize a generic HTTP client for fetching external data (like token URI content)
+http_client = httpx.Client()
 
 
 try:
@@ -91,6 +89,48 @@ def decode_create_instruction_data(data_bytes: bytes):
         print(f"Error during manual Borsh deserialization: {e}")
         raise
 
+async def get_ai_assessment(token_name, token_symbol, token_uri, new_token_mint):
+    """
+    Calls Gemini AI to assess the token's legitimacy/potential.
+    """
+    prompt = (
+        f"Analyze this newly created Solana meme token and provide a brief assessment "
+        f"of its potential, legitimacy, or any red flags based on the provided information. "
+        f"Focus on the name, symbol, and URI content. "
+        f"Token Name: '{token_name}', Symbol: '{token_symbol}', Mint Address: '{new_token_mint}'.\n"
+        f"URI: '{token_uri}' (You may attempt to fetch and analyze content from this URI if it's a valid URL, "
+        f"but do not make external network calls if not possible or if it's not a standard HTTP/S URI).\n"
+        f"Provide your assessment as a short, concise paragraph (max 100 words), and then state 'Assessment: [Positive/Neutral/Negative]'."
+    )
+    
+    # You could also try to fetch the URI content here if it's HTTP/S
+    uri_content = "URI content not fetched or not applicable."
+    if token_uri.startswith("http://") or token_uri.startswith("https://"):
+        try:
+            # Use httpx for async HTTP requests
+            async with httpx.AsyncClient() as client:
+                response = await client.get(token_uri, timeout=5) # 5 second timeout
+                response.raise_for_status() # Raise an exception for bad status codes
+                uri_content = response.text[:500] # Take first 500 chars
+                prompt += f"\n\nURI Content (first 500 chars): {uri_content}"
+        except Exception as e:
+            uri_content = f"Failed to fetch URI content: {e}"
+            prompt += f"\n\nNote: Failed to fetch URI content for AI analysis: {uri_content}"
+    elif token_uri.startswith("ipfs://"):
+        # For IPFS, you'd typically need an IPFS gateway. Not implementing fetching here.
+        prompt += f"\n\nNote: IPFS URI detected. Content not automatically fetched for AI analysis."
+
+    try:
+        print(f"Sending token data to Gemini AI for assessment...")
+        # Use generate_content for simpler text generation
+        ai_response = await gemini_model.generate_content_async(prompt)
+        assessment_text = ai_response.text
+        print(f"AI Assessment Received:\n{assessment_text}")
+        return assessment_text
+    except Exception as e:
+        print(f"Error getting AI assessment: {e}")
+        return f"AI assessment failed: {e}"
+
 
 print(f"Connecting to Solana WebSocket at: {WSS_URL}")
 print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
@@ -98,6 +138,7 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 async def pump_fun_listener():
     """
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
+    Integrates Gemini AI for token analysis.
     """
     try:
         async with websockets.connect(WSS_URL) as ws:
@@ -200,6 +241,20 @@ async def pump_fun_listener():
                                 token_uri = decoded_instruction_args.get("uri", "N/A")
                                 print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
                                 
+                                # --- NEW: Call Gemini AI for assessment ---
+                                ai_assessment = await get_ai_assessment(
+                                    token_name, 
+                                    token_symbol, 
+                                    token_uri, 
+                                    new_token_mint
+                                )
+                                print(f"\nAI Assessment Complete for {token_symbol}: {ai_assessment.split('Assessment:')[-1].strip()}") # Print just the assessment part
+
+                                # --- Your trading decision logic would go here ---
+                                # Example: if "Positive" in ai_assessment:
+                                #    await execute_buy_trade(new_token_mint, ...)
+                                #    etc.
+
                             else:
                                 print("Warning: Could not reliably extract new token mint or creator address.")
                                 print(f"Account Keys received in log: {account_keys_str}")
@@ -212,9 +267,6 @@ async def pump_fun_listener():
                         except Exception as e:
                             print(f"An unexpected error occurred during processing for signature {signature}: {e}")
                             print(f"Problematic base64 data: {program_data_log_content}")
-    except Exception as e:
-        print(f"CRITICAL ERROR: An unhandled exception occurred in the pump_fun_listener: {e}")
-
 
 # Main entry point for the asyncio event loop
 if __name__ == "__main__":
