@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with logs_subscribe filter fix)
+# pump_monitor.py (Full Code - Latest Version with RpcLogsFilter Import Fix)
 
 import asyncio
 import json
@@ -9,13 +9,12 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
-import borsh # Import the borsh library
-# NEW: Import RpcLogsFilter for the updated logs_subscribe syntax
-from solana.rpc.types import RpcLogsFilter
+import borsh
+# CORRECTED: Import RpcLogsFilter from its new location
+from solders.rpc.config import RpcLogsFilter # Or it might be from solders.rpc.filter in some versions
 from pathlib import Path
 
 # --- Configuration ---
-# Load environment variables from .env file
 load_dotenv()
 
 WSS_URL = os.getenv("SOLANA_WSS_URL")
@@ -23,7 +22,6 @@ HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- Basic Validation of .env variables ---
 if not WSS_URL:
     print("CRITICAL ERROR: SOLANA_WSS_URL not found in .env. Exiting.")
     exit()
@@ -38,10 +36,8 @@ if not GEMINI_API_KEY:
     exit()
 
 
-# Initialize Solana RPC Client (for HTTP requests)
 http_client = Client(HTTP_URL)
 
-# Initialize your wallet keypair from the private key
 try:
     wallet_keypair = Keypair.from_base58_string(PRIVATE_KEY_B58)
     print(f"Wallet Public Key: {wallet_keypair.pubkey()}")
@@ -51,44 +47,27 @@ except Exception as e:
     exit()
 
 
-# Pump.fun program ID (remains constant)
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
-# --- Manual Borsh Decoding Setup for 'create' instruction ---
-# Discriminator for the 'create' instruction (first 8 bytes of SHA256("global:create"))
-# This can be found in the pump-fun.json IDL under the 'create' instruction's 'discriminator' field.
 CREATE_INSTRUCTION_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
 
 def decode_create_instruction_data(data_bytes: bytes):
-    """
-    Manually decodes the Borsh-serialized data for the Pump.fun 'create' instruction.
-    Expected arguments: name (string), symbol (string), uri (string), creator (pubkey).
-    """
     if not data_bytes.startswith(CREATE_INSTRUCTION_DISCRIMINATOR):
         raise ValueError("Data does not start with 'create' instruction discriminator.")
 
-    # Slice off the 8-byte discriminator
     payload_bytes = data_bytes[8:]
-    
-    # Use borsh.Borsh to deserialize
-    # Borsh strings are prefixed with a 4-byte little-endian length.
-    # Borsh Pubkeys are 32 bytes.
     reader = borsh.Borsh(payload_bytes)
 
     try:
-        # Read name (string)
         name_len = reader.read_u32()
         name = reader.read_bytes(name_len).decode('utf-8')
 
-        # Read symbol (string)
         symbol_len = reader.read_u32()
         symbol = reader.read_bytes(symbol_len).decode('utf-8')
 
-        # Read uri (string)
         uri_len = reader.read_u32()
         uri = reader.read_bytes(uri_len).decode('utf-8')
 
-        # Read creator (Pubkey)
         creator_bytes = reader.read_bytes(32)
         creator = Pubkey.from_bytes(creator_bytes)
 
@@ -107,13 +86,10 @@ print(f"Connecting to Solana WebSocket at: {WSS_URL}")
 print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
-    """
-    Listens for new token creations on Pump.fun via Solana WebSocket and decodes their data.
-    """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Corrected logs_subscribe syntax for recent solana-py versions ---
+        # Use the correctly imported RpcLogsFilter
         await ws.logs_subscribe(
-            filter_=RpcLogsFilter.Mentions([str(PUMPFUN_PROGRAM_ID)]), # Use filter_= and Mentions
+            filter_=RpcLogsFilter.Mentions([str(PUMPFUN_PROGRAM_ID)]),
             commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
@@ -134,16 +110,14 @@ async def pump_fun_listener():
                     logs = log_data.get('logs', [])
 
                     is_new_token_creation = False
-                    program_data_log_content = None # Store the content for decoding
+                    program_data_log_content = None
 
-                    # Iterate through logs to find the "Instruction: Create" and subsequent "Program data:"
                     for i, log_line in enumerate(logs):
                         if "Program log: Instruction: Create" in log_line:
                             is_new_token_creation = True
-                            # The 'Program data:' log is usually right after the 'Instruction: Create'
                             if i + 1 < len(logs) and "Program data: " in logs[i+1]:
                                 program_data_log_content = logs[i+1].replace("Program data: ", "")
-                            break # Found the create instruction, no need to check further logs for this transaction
+                            break
 
                     if is_new_token_creation and program_data_log_content:
                         print(f"\n--- Detected Potential New Pump.fun Token Creation ---")
@@ -151,21 +125,13 @@ async def pump_fun_listener():
                         print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...")
 
                         try:
-                            # Decode the base64 data to bytes
                             decoded_bytes = base64.b64decode(program_data_log_content)
-
-                            # --- Use our manual Borsh decoder ---
                             decoded_instruction_args = decode_create_instruction_data(decoded_bytes)
                             
                             print(f"Decoded Instruction Data (Args): {decoded_instruction_args}")
                             
-                            # The 'create' instruction in Pump.fun's IDL also has the 'creator' as an argument
-                            # which we've now directly decoded.
                             creator_address_from_args = decoded_instruction_args.get("creator")
 
-                            # The 'mint' (new token address) is still best extracted from accountKeys.
-                            # Based on the pump-fun.json IDL 'create' instruction's `accounts` array:
-                            # The 'mint' account is usually the first Pubkey in the `accountKeys` list (index 0).
                             account_keys_str = log_data.get('accountKeys', [])
                             new_token_mint = None
                             if len(account_keys_str) > 0:
