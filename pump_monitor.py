@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with In-Python Log Filtering)
+# pump_monitor.py (Full Code - Latest Version with RpcTransactionLogsFilter Import Fix)
 
 import asyncio
 import json
@@ -10,7 +10,8 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# REMOVED: from solders.rpc.config import RpcLogsFilter # Not needed
+# NEW: Import the precise RpcTransactionLogsFilter enum from solders.rpc.config
+from solders.rpc.config import RpcTransactionLogsFilter 
 
 from pathlib import Path
 
@@ -88,16 +89,15 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     """
-    Listens for ALL logs on Solana Mainnet and then filters them in Python
-    to find Pump.fun new token creations.
+    Listens for logs on Solana Mainnet using the precise RpcTransactionLogsFilter.
     """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Subscribe to ALL logs ---
+        # --- NEW: Use RpcTransactionLogsFilter.Mentions with the Pubkey ---
         await ws.logs_subscribe(
-            filter_="all", # Subscribe to all logs
+            filter_=RpcTransactionLogsFilter.Mentions([PUMPFUN_PROGRAM_ID]), # Pass Pubkey object directly
             commitment="confirmed"
         )
-        print("Subscribed to ALL program logs. Waiting for new token creations on Mainnet (filtering in Python)...")
+        print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
 
         first_response = await ws.recv()
         if isinstance(first_response, list) and len(first_response) > 0 and hasattr(first_response[0], 'result'):
@@ -114,15 +114,11 @@ async def pump_fun_listener():
                     signature = log_data.get('signature')
                     logs = log_data.get('logs', [])
                     
-                    # --- NEW: Filter logs in Python ---
-                    # Check if the Pump.fun program ID is mentioned in the transaction's accountKeys
-                    # This is the primary filter now
-                    account_keys_str = log_data.get('accountKeys', [])
-                    if PUMPFUN_PROGRAM_ID_STR not in account_keys_str:
-                        # This log is not related to Pump.fun, so skip it
+                    # Even with RPC filtering, do an in-Python check for robustness
+                    if PUMPFUN_PROGRAM_ID_STR not in log_data.get('accountKeys', []):
                         continue
 
-                    # If Pump.fun is mentioned, proceed to look for 'create' instruction logs
+
                     is_new_token_creation = False
                     program_data_log_content = None
 
@@ -146,6 +142,7 @@ async def pump_fun_listener():
                             
                             creator_address_from_args = decoded_instruction_args.get("creator")
 
+                            account_keys_str = log_data.get('accountKeys', [])
                             new_token_mint = None
                             if len(account_keys_str) > 0:
                                 new_token_mint = Pubkey.from_string(account_keys_str[0])
