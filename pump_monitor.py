@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with RpcLogsFilter Import Final Fix)
+# pump_monitor.py (Full Code - Latest Version with Raw RPC Filter Fix)
 
 import asyncio
 import json
@@ -10,8 +10,8 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# CORRECTED: Import RpcLogsFilter from its correct location in solders
-from solders.rpc.config import RpcLogsFilter # This is the standard path in recent solders versions
+# REMOVED: from solders.rpc.config import RpcLogsFilter # No longer needed, using raw dict
+
 from pathlib import Path
 
 # --- Configuration ---
@@ -87,14 +87,16 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     async with connect(WSS_URL) as ws:
-        # --- NEW: Corrected logs_subscribe syntax with RpcLogsFilter from solders.rpc.config ---
+        # --- NEW: Logs_subscribe with raw dictionary filter ---
         await ws.logs_subscribe(
-            filter_=RpcLogsFilter.Mentions([str(PUMPFUN_PROGRAM_ID)]), # Use RpcLogsFilter.Mentions
+            # Pass a dictionary directly as per Solana RPC spec
+            filter_={"mentions": [str(PUMPFUN_PROGRAM_ID)]},
             commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
 
         first_response = await ws.recv()
+        # The first response should be the subscription ID, typically in a list wrapper
         if isinstance(first_response, list) and len(first_response) > 0 and hasattr(first_response[0], 'result'):
             subscription_id = first_response[0].result
             print(f"Successfully subscribed with ID: {subscription_id}")
