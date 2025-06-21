@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Indented JSON Dump)
+# pump_monitor.py (Full Code - Latest Version with Manual Borsh Decoding)
 
 import asyncio
 import json
@@ -9,13 +9,13 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
-from anchorpy import Program, Idl
+import borsh # NEW: Import the borsh library
 from pathlib import Path
 
+# --- Configuration ---
 # Load environment variables from .env file
 load_dotenv()
 
-# --- Configuration ---
 WSS_URL = os.getenv("SOLANA_WSS_URL")
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
@@ -35,7 +35,6 @@ if not GEMINI_API_KEY:
     print("CRITICAL ERROR: GEMINI_API_KEY not found in .env. Exiting.")
     exit()
 
-
 # Initialize Solana RPC Client (for HTTP requests)
 http_client = Client(HTTP_URL)
 
@@ -48,65 +47,59 @@ except Exception as e:
     print("Please ensure SOLANA_PRIVATE_KEY is a valid Base58 encoded private key.")
     exit()
 
-
-# Pump.fun program ID
+# Pump.fun program ID (remains constant)
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
+# --- Manual Borsh Decoding Setup for 'create' instruction ---
+# Discriminator for the 'create' instruction (first 8 bytes of SHA256("global:create"))
+# This can be found in the pump-fun.json IDL under the 'create' instruction's 'discriminator' field.
+CREATE_INSTRUCTION_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
 
-# --- Load and Patch Pump.fun IDL ---
-idl_dict_to_patch = None
-try:
-    with Path("pump-fun.json").open() as f:
-        raw_idl_content = f.read()
+def decode_create_instruction_data(data_bytes: bytes):
+    """
+    Manually decodes the Borsh-serialized data for the Pump.fun 'create' instruction.
+    Expected arguments: name (string), symbol (string), uri (string), creator (pubkey).
+    """
+    if not data_bytes.startswith(CREATE_INSTRUCTION_DISCRIMINATOR):
+        raise ValueError("Data does not start with 'create' instruction discriminator.")
+
+    # Slice off the 8-byte discriminator
+    payload_bytes = data_bytes[8:]
     
-    idl_dict_to_patch = json.loads(raw_idl_content)
+    # Use borsh.Borsh to deserialize
+    # Borsh strings are prefixed with a 4-byte little-endian length.
+    # Borsh Pubkeys are 32 bytes.
+    reader = borsh.Borsh(payload_bytes)
 
-    # --- PATCHING LOGIC ---
-    for instruction in idl_dict_to_patch.get('instructions', []):
-        for account in instruction.get('accounts', []):
-            if 'writable' in account:
-                account['isMut'] = account['writable']
-            elif 'isMut' not in account:
-                account['isMut'] = False
+    try:
+        # Read name (string)
+        name_len = reader.read_u32()
+        name = reader.read_bytes(name_len).decode('utf-8')
 
-            if 'signer' in account:
-                account['isSigner'] = account['signer']
-            elif 'isSigner' not in account:
-                account['isSigner'] = False
-            
-            if 'isMut' not in account:
-                account['isMut'] = False
-            if 'isSigner' not in account:
-                account['isSigner'] = False
+        # Read symbol (string)
+        symbol_len = reader.read_u32()
+        symbol = reader.read_bytes(symbol_len).decode('utf-8')
 
-    for global_account_def in idl_dict_to_patch.get('accounts', []):
-        if 'isMut' not in global_account_def:
-            global_account_def['isMut'] = False
-        if 'isSigner' not in global_account_def:
-            global_account_def['isSigner'] = False
-    # --- END PATCHING LOGIC ---
+        # Read uri (string)
+        uri_len = reader.read_u32()
+        uri = reader.read_bytes(uri_len).decode('utf-8')
 
-    # Convert the patched dictionary back to an Idl object using indented JSON
-    # This is the crucial line being modified again
-    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch, indent=2)) # Use indent for multi-line JSON
-    pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
-    print("Pump.fun IDL loaded and patched successfully for decoding.")
-except FileNotFoundError:
-    print("CRITICAL ERROR: pump-fun.json not found.")
-    print("Please ensure 'pump-fun.json' is in the same directory as this script.")
-    print("Download from: https://raw.githubusercontent.com/rckprtr/pumpdotfun-sdk/main/src/IDL/pump-fun.json (click Raw and save)")
-    exit()
-except Exception as e:
-    print(f"CRITICAL ERROR: Error loading, patching, or parsing Pump.fun IDL: {e}")
-    # Print the full problematic dictionary content if it fails here
-    if idl_dict_to_patch:
-        print("\n--- DEBUG: Problematic IDL Dictionary content (full, if available) ---")
-        print(json.dumps(idl_dict_to_patch, indent=2))
-        print("--- END DEBUG ---\n")
-    exit()
+        # Read creator (Pubkey)
+        creator_bytes = reader.read_bytes(32)
+        creator = Pubkey.from_bytes(creator_bytes)
+
+        return {
+            "name": name,
+            "symbol": symbol,
+            "uri": uri,
+            "creator": creator
+        }
+    except Exception as e:
+        print(f"Error during manual Borsh deserialization: {e}")
+        raise
 
 
-print(f"\nConnecting to Solana WebSocket at: {WSS_URL}")
+print(f"Connecting to Solana WebSocket at: {WSS_URL}")
 print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
@@ -116,7 +109,7 @@ async def pump_fun_listener():
     async with connect(WSS_URL) as ws:
         await ws.logs_subscribe(
             filter_by_mention=PUMPFUN_PROGRAM_ID,
-            commitment="confirmed"
+            commitment="confirmed" # 'confirmed' commitment balances speed with reliability
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
 
@@ -136,14 +129,16 @@ async def pump_fun_listener():
                     logs = log_data.get('logs', [])
 
                     is_new_token_creation = False
-                    program_data_log_content = None
+                    program_data_log_content = None # Store the content for decoding
 
+                    # Iterate through logs to find the "Instruction: Create" and subsequent "Program data:"
                     for i, log_line in enumerate(logs):
                         if "Program log: Instruction: Create" in log_line:
                             is_new_token_creation = True
+                            # The 'Program data:' log is usually right after the 'Instruction: Create'
                             if i + 1 < len(logs) and "Program data: " in logs[i+1]:
                                 program_data_log_content = logs[i+1].replace("Program data: ", "")
-                            break
+                            break # Found the create instruction, no need to check further logs for this transaction
 
                     if is_new_token_creation and program_data_log_content:
                         print(f"\n--- Detected Potential New Pump.fun Token Creation ---")
@@ -151,42 +146,45 @@ async def pump_fun_listener():
                         print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...")
 
                         try:
+                            # Decode the base64 data to bytes
                             decoded_bytes = base64.b64decode(program_data_log_content)
-                            decoded_instruction = pump_program_decoder.coder.instruction.decode(decoded_bytes)
+
+                            # --- NEW: Use our manual Borsh decoder ---
+                            decoded_instruction_args = decode_create_instruction_data(decoded_bytes)
                             
-                            if decoded_instruction and decoded_instruction.name == 'create':
-                                print(f"Decoded Instruction Name: {decoded_instruction.name}")
-                                print(f"Decoded Instruction Data (Args): {decoded_instruction.data}")
+                            print(f"Decoded Instruction Data (Args): {decoded_instruction_args}")
+                            
+                            # The 'create' instruction in Pump.fun's IDL also has the 'creator' as an argument
+                            # which we've now directly decoded.
+                            creator_address_from_args = decoded_instruction_args.get("creator")
+
+                            # The 'mint' (new token address) is still best extracted from accountKeys.
+                            # Based on the pump-fun.json IDL 'create' instruction's `accounts` array:
+                            # The 'mint' account is usually the first Pubkey in the `accountKeys` list (index 0).
+                            account_keys_str = log_data.get('accountKeys', [])
+                            new_token_mint = None
+                            if len(account_keys_str) > 0:
+                                new_token_mint = Pubkey.from_string(account_keys_str[0])
+
+                            if new_token_mint and creator_address_from_args:
+                                print(f"**Extracted New Token Mint:** {new_token_mint}")
+                                print(f"**Extracted Creator Address (from args):** {creator_address_from_args}")
+                                token_name = decoded_instruction_args.get("name", "N/A")
+                                token_symbol = decoded_instruction_args.get("symbol", "N/A")
+                                token_uri = decoded_instruction_args.get("uri", "N/A")
+                                print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
                                 
-                                account_keys_str = log_data.get('accountKeys', [])
-                                
-                                new_token_mint = None
-                                creator_address = None
-
-                                if len(account_keys_str) > 0:
-                                    new_token_mint = Pubkey.from_string(account_keys_str[0])
-                                if len(account_keys_str) > 4:
-                                    creator_address = Pubkey.from_string(account_keys_str[4])
-
-                                if new_token_mint and creator_address:
-                                    print(f"**Extracted New Token Mint:** {new_token_mint}")
-                                    print(f"**Extracted Creator Address:** {creator_address}")
-                                    token_name = decoded_instruction.data.name
-                                    token_symbol = decoded_instruction.data.symbol
-                                    token_uri = decoded_instruction.data.uri
-                                    print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
-                                    
-                                else:
-                                    print("Warning: Could not reliably extract new token mint or creator address from accountKeys.")
-                                    print(f"Account Keys received in log: {account_keys_str}")
-
-                                print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
-
                             else:
-                                print(f"Instruction decoded, but it's not the expected 'create' instruction or data is malformed for signature: {signature}")
+                                print("Warning: Could not reliably extract new token mint or creator address.")
+                                print(f"Account Keys received in log: {account_keys_str}")
 
+                            print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
+
+                        except ValueError as ve:
+                            print(f"Error during manual Borsh decoding: {ve}")
+                            print(f"Problematic base64 data: {program_data_log_content}")
                         except Exception as e:
-                            print(f"Error during decoding or data extraction for signature {signature}: {e}")
+                            print(f"An unexpected error occurred during processing for signature {signature}: {e}")
                             print(f"Problematic base64 data: {program_data_log_content}")
 
 # Main entry point for the asyncio event loop
