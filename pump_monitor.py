@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with DEEP IDL Debugging)
+# pump_monitor.py (Full Code - Latest Version with Compact JSON Dump)
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
-from anchorpy import Program, Idl # Keep Idl import for now to see where it breaks
+from anchorpy import Program, Idl
 from pathlib import Path
 
 # Load environment variables from .env file
@@ -54,36 +54,31 @@ PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBE
 
 
 # --- Load and Patch Pump.fun IDL ---
-idl_dict_to_patch = None # Initialize outside try for debugging
+idl_dict_to_patch = None
 try:
     with Path("pump-fun.json").open() as f:
         raw_idl_content = f.read()
     
-    # Parse the raw JSON string into a Python dictionary
     idl_dict_to_patch = json.loads(raw_idl_content)
 
     # --- PATCHING LOGIC ---
-    # Iterate through all instructions and their accounts to add missing 'isMut' and 'isSigner'
     for instruction in idl_dict_to_patch.get('instructions', []):
         for account in instruction.get('accounts', []):
-            # If 'writable' or 'signer' keys exist, propagate them to 'isMut'/'isSigner'
             if 'writable' in account:
                 account['isMut'] = account['writable']
-            elif 'isMut' not in account: # If 'isMut' is still not set, default to False
+            elif 'isMut' not in account:
                 account['isMut'] = False
 
             if 'signer' in account:
                 account['isSigner'] = account['signer']
-            elif 'isSigner' not in account: # If 'isSigner' is still not set, default to False
+            elif 'isSigner' not in account:
                 account['isSigner'] = False
             
-            # Ensure these keys are always present even if they were never defined
-            if 'isMut' not in account:
+            if 'isMut' not in account: # Ensure always set
                 account['isMut'] = False
-            if 'isSigner' not in account:
+            if 'isSigner' not in account: # Ensure always set
                 account['isSigner'] = False
 
-    # Patch top-level accounts definition too, if any exist and are missing flags
     for global_account_def in idl_dict_to_patch.get('accounts', []):
         if 'isMut' not in global_account_def:
             global_account_def['isMut'] = False
@@ -92,13 +87,14 @@ try:
     # --- END PATCHING LOGIC ---
 
     # --- DEEP DEBUGGING: Print the entire patched IDL dictionary before Idl.from_json ---
-    print("\n--- DEEP DEBUG: Full Patched IDL Dictionary (before Idl.from_json) ---")
-    print(json.dumps(idl_dict_to_patch, indent=2))
-    print("--- END DEEP DEBUG ---\n")
+    # Temporarily remove this for now, as it prints a lot and might be confusing
+    # print("\n--- DEEP DEBUG: Full Patched IDL Dictionary (before Idl.from_json) ---")
+    # print(json.dumps(idl_dict_to_patch, indent=2))
+    # print("--- END DEEP DEBUG ---\n")
 
-    # Convert the patched dictionary back to an Idl object
-    # This is the line that's currently throwing the error
-    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch))
+    # Convert the patched dictionary back to an Idl object using compact JSON
+    # This is the crucial line being modified
+    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch, separators=(',', ':'))) # Use separators for compact JSON
     pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
     print("Pump.fun IDL loaded and patched successfully for decoding.")
 except FileNotFoundError:
@@ -108,10 +104,11 @@ except FileNotFoundError:
     exit()
 except Exception as e:
     print(f"CRITICAL ERROR: Error loading, patching, or parsing Pump.fun IDL: {e}")
-    # If it fails here, the idl_dict_to_patch *should* contain the problematic structure
     if idl_dict_to_patch:
         print("\n--- DEBUG: Problematic IDL Dictionary content (partial, if available) ---")
-        print(json.dumps(idl_dict_to_patch, indent=2)[:2000]) # Print first 2000 chars for context
+        # Print the problematic part explicitly if available
+        # You might need to manually inspect the file on your server if this still fails
+        print(json.dumps(idl_dict_to_patch, indent=2)[300:600]) # Focused snippet
         print("--- END DEBUG ---\n")
     exit()
 
