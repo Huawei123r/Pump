@@ -1,40 +1,35 @@
-# pump_monitor.py (Full Code - Latest Version with Raw Websockets Connection)
+# pump_monitor.py (Full Code - Latest Version, Switching to Mainnet)
 
 import asyncio
 import json
 import base64
-# REMOVED: from solana.rpc.websocket_api import connect
-# REMOVED: from solana.rpc.api import Client # We might need a direct httpx client later for RPC, but not for WS
+import websockets # Import the raw websockets library
+import websockets.exceptions 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-import websockets # NEW: Import the raw websockets library
-import websockets.exceptions # For more specific error handling
+# We will re-add solana.rpc.api.Client for HTTP requests later as needed.
+# For now, stick to raw websockets for the listener.
 
 from pathlib import Path
 
 # --- Configuration ---
 load_dotenv()
 
-# TEMPORARILY SWITCH TO PUBLIC DEVNET FOR CONNECTION DEBUGGING
-# Keep using Devnet until we confirm basic WebSocket connectivity.
-WSS_URL = "wss://api.devnet.solana.com/" 
-HTTP_URL = "https://api.devnet.solana.com/" # Corresponding HTTP for Devnet
-
-# Original Mainnet URLs (commented out for debugging):
-# WSS_URL = os.getenv("SOLANA_WSS_URL")
-# HTTP_URL = os.getenv("SOLANA_HTTP_URL")
+# --- Revert to Mainnet URLs from .env ---
+WSS_URL = os.getenv("SOLANA_WSS_URL")
+HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not WSS_URL:
-    print("CRITICAL ERROR: SOLANA_WSS_URL not found in .env or not set for debug. Exiting.")
+    print("CRITICAL ERROR: SOLANA_WSS_URL not found in .env. Exiting.")
     exit()
 if not HTTP_URL:
-    print("CRITICAL ERROR: SOLANA_HTTP_URL not found in .env or not set for debug. Exiting.")
+    print("CRITICAL ERROR: SOLANA_HTTP_URL not found in .env. Exiting.")
     exit()
 if not PRIVATE_KEY_B58:
     print("CRITICAL ERROR: SOLANA_PRIVATE_KEY not found in .env. Exiting.")
@@ -44,9 +39,13 @@ if not GEMINI_API_KEY:
     exit()
 
 
-# We will re-add a direct HTTP client if needed for RPC calls later,
-# but for now, focus on the WebSocket connection.
-# http_client = Client(HTTP_URL) # Commented out as Client is from solana.rpc.api
+# We will need an HTTP client for fetching balances, etc. Let's re-add httpx for general HTTP requests
+# Since we removed solana.rpc.api.Client, we need a generic one.
+import httpx # NEW: Import httpx for general HTTP requests
+
+# Initialize a generic HTTP client
+http_client = httpx.Client() # Use httpx for regular HTTP requests
+
 
 try:
     wallet_keypair = Keypair.from_base58_string(PRIVATE_KEY_B58)
@@ -58,7 +57,7 @@ except Exception as e:
 
 
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
-PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID) # Convert to string once for efficient checking
+PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID) 
 
 CREATE_INSTRUCTION_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
 
@@ -98,18 +97,16 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     """
-    Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request
-    using the core 'websockets' library.
+    Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     """
     try:
-        # --- NEW: Use raw websockets.connect ---
         async with websockets.connect(WSS_URL) as ws:
             subscribe_request = {
                 "jsonrpc": "2.0",
-                "id": 1, # A unique ID for your subscription
+                "id": 1, 
                 "method": "logsSubscribe",
                 "params": [
-                    {"mentions": [str(PUMPFUN_PROGRAM_ID)]}, # Filter by Pump.fun program ID
+                    {"mentions": [PUMPFUN_PROGRAM_ID_STR]}, # Filter by Pump.fun program ID as a string
                     {"commitment": "confirmed"}
                 ]
             }
@@ -119,7 +116,7 @@ async def pump_fun_listener():
 
             try:
                 print(f"Awaiting first response (expecting subscription ID or error from RPC)...")
-                first_response_raw = await ws.recv() # Get raw string message
+                first_response_raw = await ws.recv() # Get raw string
                 print(f"Received first response (raw): {first_response_raw}")
 
                 parsed_first_response = json.loads(first_response_raw)
@@ -136,36 +133,33 @@ async def pump_fun_listener():
             except websockets.exceptions.ConnectionClosedOK as e:
                 print(f"ERROR: WebSocket connection closed gracefully (OK): {e}")
                 print(f"Code: {e.code}, Reason: {e.reason}")
-                return # Exit function if connection closed
+                return
             except websockets.exceptions.ConnectionClosedError as e:
                 print(f"CRITICAL ERROR: WebSocket connection closed abnormally: {e}")
                 print(f"Code: {e.code}, Reason: {e.reason}")
-                return # Exit function if connection closed
+                return
             except json.JSONDecodeError as e:
                 print(f"CRITICAL ERROR: Could not decode first response as JSON: {e}")
                 print(f"Problematic raw response: {first_response_raw}")
-                return # Exit
+                return
             except Exception as e:
                 print(f"CRITICAL ERROR: An unexpected error occurred during initial subscription handshake: {e}")
-                return # Exit
+                return
 
 
             print("Waiting for new token creations (filtering in Python)...")
 
-            async for msg_str in ws: # ws.recv() yields raw string messages
+            async for msg_str in ws:
                 try:
                     msg = json.loads(msg_str)
                 except json.JSONDecodeError:
-                    # This is common for keep-alive pings or non-JSON messages
-                    # print(f"Warning: Received non-JSON message: {msg_str[:100]}...")
-                    continue # Skip to the next message if it's not JSON
+                    continue
 
                 if 'params' in msg and 'result' in msg['params'] and 'value' in msg['params']['result']:
                     log_data = msg['params']['result'].get('value', {})
                     signature = log_data.get('signature')
                     logs = log_data.get('logs', [])
                     
-                    # Even with RPC filtering (if it works), do an in-Python check for robustness
                     account_keys_str = log_data.get('accountKeys', [])
                     if PUMPFUN_PROGRAM_ID_STR not in account_keys_str:
                         continue
