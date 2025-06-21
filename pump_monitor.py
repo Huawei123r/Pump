@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Manual Borsh Decoding)
+# pump_monitor.py (Full Code - Latest Version with logs_subscribe filter fix)
 
 import asyncio
 import json
@@ -9,7 +9,9 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
-import borsh # NEW: Import the borsh library
+import borsh # Import the borsh library
+# NEW: Import RpcLogsFilter for the updated logs_subscribe syntax
+from solana.rpc.types import RpcLogsFilter
 from pathlib import Path
 
 # --- Configuration ---
@@ -35,6 +37,7 @@ if not GEMINI_API_KEY:
     print("CRITICAL ERROR: GEMINI_API_KEY not found in .env. Exiting.")
     exit()
 
+
 # Initialize Solana RPC Client (for HTTP requests)
 http_client = Client(HTTP_URL)
 
@@ -46,6 +49,7 @@ except Exception as e:
     print(f"CRITICAL ERROR: Could not load Solana private key from .env: {e}")
     print("Please ensure SOLANA_PRIVATE_KEY is a valid Base58 encoded private key.")
     exit()
+
 
 # Pump.fun program ID (remains constant)
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
@@ -107,9 +111,10 @@ async def pump_fun_listener():
     Listens for new token creations on Pump.fun via Solana WebSocket and decodes their data.
     """
     async with connect(WSS_URL) as ws:
+        # --- NEW: Corrected logs_subscribe syntax for recent solana-py versions ---
         await ws.logs_subscribe(
-            filter_by_mention=PUMPFUN_PROGRAM_ID,
-            commitment="confirmed" # 'confirmed' commitment balances speed with reliability
+            filter_=RpcLogsFilter.Mentions([str(PUMPFUN_PROGRAM_ID)]), # Use filter_= and Mentions
+            commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
 
@@ -149,7 +154,7 @@ async def pump_fun_listener():
                             # Decode the base64 data to bytes
                             decoded_bytes = base64.b64decode(program_data_log_content)
 
-                            # --- NEW: Use our manual Borsh decoder ---
+                            # --- Use our manual Borsh decoder ---
                             decoded_instruction_args = decode_create_instruction_data(decoded_bytes)
                             
                             print(f"Decoded Instruction Data (Args): {decoded_instruction_args}")
