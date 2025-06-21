@@ -1,0 +1,6 @@
+solders
+python-dotenv
+google-generativeai
+borsh
+websockets
+httpx
