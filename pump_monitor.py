@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Raw RPC Filter Fix)
+# pump_monitor.py (Full Code - Latest Version with In-Python Log Filtering)
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# REMOVED: from solders.rpc.config import RpcLogsFilter # No longer needed, using raw dict
+# REMOVED: from solders.rpc.config import RpcLogsFilter # Not needed
 
 from pathlib import Path
 
@@ -48,6 +48,7 @@ except Exception as e:
 
 
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID) # Convert to string once for efficient checking
 
 CREATE_INSTRUCTION_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
 
@@ -86,17 +87,19 @@ print(f"Connecting to Solana WebSocket at: {WSS_URL}")
 print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
+    """
+    Listens for ALL logs on Solana Mainnet and then filters them in Python
+    to find Pump.fun new token creations.
+    """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Logs_subscribe with raw dictionary filter ---
+        # --- NEW: Subscribe to ALL logs ---
         await ws.logs_subscribe(
-            # Pass a dictionary directly as per Solana RPC spec
-            filter_={"mentions": [str(PUMPFUN_PROGRAM_ID)]},
+            filter_="all", # Subscribe to all logs
             commitment="confirmed"
         )
-        print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
+        print("Subscribed to ALL program logs. Waiting for new token creations on Mainnet (filtering in Python)...")
 
         first_response = await ws.recv()
-        # The first response should be the subscription ID, typically in a list wrapper
         if isinstance(first_response, list) and len(first_response) > 0 and hasattr(first_response[0], 'result'):
             subscription_id = first_response[0].result
             print(f"Successfully subscribed with ID: {subscription_id}")
@@ -110,7 +113,16 @@ async def pump_fun_listener():
                     log_data = msg['params']['result'].get('value', {})
                     signature = log_data.get('signature')
                     logs = log_data.get('logs', [])
+                    
+                    # --- NEW: Filter logs in Python ---
+                    # Check if the Pump.fun program ID is mentioned in the transaction's accountKeys
+                    # This is the primary filter now
+                    account_keys_str = log_data.get('accountKeys', [])
+                    if PUMPFUN_PROGRAM_ID_STR not in account_keys_str:
+                        # This log is not related to Pump.fun, so skip it
+                        continue
 
+                    # If Pump.fun is mentioned, proceed to look for 'create' instruction logs
                     is_new_token_creation = False
                     program_data_log_content = None
 
@@ -134,7 +146,6 @@ async def pump_fun_listener():
                             
                             creator_address_from_args = decoded_instruction_args.get("creator")
 
-                            account_keys_str = log_data.get('accountKeys', [])
                             new_token_mint = None
                             if len(account_keys_str) > 0:
                                 new_token_mint = Pubkey.from_string(account_keys_str[0])
