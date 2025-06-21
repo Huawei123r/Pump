@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with RpcTransactionLogsFilter Constructor Fix)
+# pump_monitor.py (Full Code - Latest Version with Raw WebSocket Send for Logs Subscribe)
 
 import asyncio
 import json
@@ -10,8 +10,7 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# Import the precise RpcTransactionLogsFilter enum from solders.rpc.config
-from solders.rpc.config import RpcTransactionLogsFilter 
+# No RpcTransactionLogsFilter import needed anymore
 
 from pathlib import Path
 
@@ -89,84 +88,105 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     """
-    Listens for logs on Solana Mainnet using the precise RpcTransactionLogsFilter.
+    Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Use RpcTransactionLogsFilter constructor with 'mentions' argument ---
-        await ws.logs_subscribe(
-            filter_=RpcTransactionLogsFilter(mentions=[PUMPFUN_PROGRAM_ID]), # Pass Pubkey object directly
-            commitment="confirmed"
-        )
-        print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
+        # --- NEW: Manually construct and send the JSON-RPC subscribe request ---
+        subscribe_request = {
+            "jsonrpc": "2.0",
+            "id": 1, # A unique ID for your subscription
+            "method": "logsSubscribe",
+            "params": [
+                {"mentions": [str(PUMPFUN_PROGRAM_ID)]}, # Filter by Pump.fun program ID
+                {"commitment": "confirmed"}
+            ]
+        }
+        
+        # Send the JSON-RPC request as a string
+        await ws.send(json.dumps(subscribe_request))
+        print(f"Sent subscription request: {json.dumps(subscribe_request)}")
 
+        # Wait for the initial subscription confirmation message
         first_response = await ws.recv()
-        if isinstance(first_response, list) and len(first_response) > 0 and hasattr(first_response[0], 'result'):
-            subscription_id = first_response[0].result
-            print(f"Successfully subscribed with ID: {subscription_id}")
-        else:
-            print(f"Warning: Could not get subscription ID from first response: {first_response}")
+        try:
+            parsed_first_response = json.loads(first_response)
+            if 'result' in parsed_first_response and 'id' in parsed_first_response:
+                subscription_id = parsed_first_response['result']
+                print(f"Successfully subscribed with ID: {subscription_id}")
+            else:
+                print(f"Warning: Unexpected first response structure: {parsed_first_response}")
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode first response as JSON: {first_response}")
+            print("This might be a raw message, not a JSON-RPC response.")
+
+        print("Waiting for new token creations on Mainnet (filtering in Python)...")
+
+        async for msg_str in ws: # ws.recv() yields raw string messages
+            try:
+                msg = json.loads(msg_str)
+            except json.JSONDecodeError:
+                print(f"Warning: Received non-JSON message: {msg_str[:100]}...") # Print first 100 chars
+                continue # Skip to the next message if it's not JSON
+
+            if 'params' in msg and 'result' in msg['params'] and 'value' in msg['params']['result']:
+                log_data = msg['params']['result'].get('value', {})
+                signature = log_data.get('signature')
+                logs = log_data.get('logs', [])
+                
+                # Even with RPC filtering (if it works), do an in-Python check for robustness
+                # The RPC filter might send some unrelated logs sometimes
+                account_keys_str = log_data.get('accountKeys', [])
+                if PUMPFUN_PROGRAM_ID_STR not in account_keys_str:
+                    continue
 
 
-        async for msg_list in ws:
-            for msg in msg_list:
-                if 'params' in msg and 'result' in msg['params'] and 'value' in msg['params']['result']:
-                    log_data = msg['params']['result'].get('value', {})
-                    signature = log_data.get('signature')
-                    logs = log_data.get('logs', [])
-                    
-                    # Even with RPC filtering, do an in-Python check for robustness
-                    if PUMPFUN_PROGRAM_ID_STR not in log_data.get('accountKeys', []):
-                        continue
+                is_new_token_creation = False
+                program_data_log_content = None
 
+                for i, log_line in enumerate(logs):
+                    if "Program log: Instruction: Create" in log_line:
+                        is_new_token_creation = True
+                        if i + 1 < len(logs) and "Program data: " in logs[i+1]:
+                            program_data_log_content = logs[i+1].replace("Program data: ", "")
+                        break
 
-                    is_new_token_creation = False
-                    program_data_log_content = None
+                if is_new_token_creation and program_data_log_content:
+                    print(f"\n--- Detected Potential New Pump.fun Token Creation ---")
+                    print(f"Transaction Signature: {signature}")
+                    print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...")
 
-                    for i, log_line in enumerate(logs):
-                        if "Program log: Instruction: Create" in log_line:
-                            is_new_token_creation = True
-                            if i + 1 < len(logs) and "Program data: " in logs[i+1]:
-                                program_data_log_content = logs[i+1].replace("Program data: ", "")
-                            break
+                    try:
+                        decoded_bytes = base64.b64decode(program_data_log_content)
+                        decoded_instruction_args = decode_create_instruction_data(decoded_bytes)
+                        
+                        print(f"Decoded Instruction Data (Args): {decoded_instruction_args}")
+                        
+                        creator_address_from_args = decoded_instruction_args.get("creator")
 
-                    if is_new_token_creation and program_data_log_content:
-                        print(f"\n--- Detected Potential New Pump.fun Token Creation ---")
-                        print(f"Transaction Signature: {signature}")
-                        print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...")
+                        new_token_mint = None
+                        if len(account_keys_str) > 0:
+                            new_token_mint = Pubkey.from_string(account_keys_str[0])
 
-                        try:
-                            decoded_bytes = base64.b64decode(program_data_log_content)
-                            decoded_instruction_args = decode_create_instruction_data(decoded_bytes)
+                        if new_token_mint and creator_address_from_args:
+                            print(f"**Extracted New Token Mint:** {new_token_mint}")
+                            print(f"**Extracted Creator Address (from args):** {creator_address_from_args}")
+                            token_name = decoded_instruction_args.get("name", "N/A")
+                            token_symbol = decoded_instruction_args.get("symbol", "N/A")
+                            token_uri = decoded_instruction_args.get("uri", "N/A")
+                            print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
                             
-                            print(f"Decoded Instruction Data (Args): {decoded_instruction_args}")
-                            
-                            creator_address_from_args = decoded_instruction_args.get("creator")
+                        else:
+                            print("Warning: Could not reliably extract new token mint or creator address.")
+                            print(f"Account Keys received in log: {account_keys_str}")
 
-                            account_keys_str = log_data.get('accountKeys', [])
-                            new_token_mint = None
-                            if len(account_keys_str) > 0:
-                                new_token_mint = Pubkey.from_string(account_keys_str[0])
+                        print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
 
-                            if new_token_mint and creator_address_from_args:
-                                print(f"**Extracted New Token Mint:** {new_token_mint}")
-                                print(f"**Extracted Creator Address (from args):** {creator_address_from_args}")
-                                token_name = decoded_instruction_args.get("name", "N/A")
-                                token_symbol = decoded_instruction_args.get("symbol", "N/A")
-                                token_uri = decoded_instruction_args.get("uri", "N/A")
-                                print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
-                                
-                            else:
-                                print("Warning: Could not reliably extract new token mint or creator address.")
-                                print(f"Account Keys received in log: {account_keys_str}")
-
-                            print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
-
-                        except ValueError as ve:
-                            print(f"Error during manual Borsh decoding: {ve}")
-                            print(f"Problematic base64 data: {program_data_log_content}")
-                        except Exception as e:
-                            print(f"An unexpected error occurred during processing for signature {signature}: {e}")
-                            print(f"Problematic base64 data: {program_data_log_content}")
+                    except ValueError as ve:
+                        print(f"Error during manual Borsh decoding: {ve}")
+                        print(f"Problematic base64 data: {program_data_log_content}")
+                    except Exception as e:
+                        print(f"An unexpected error occurred during processing for signature {signature}: {e}")
+                        print(f"Problematic base64 data: {program_data_log_content}")
 
 # Main entry point for the asyncio event loop
 if __name__ == "__main__":
