@@ -1,17 +1,19 @@
-# pump_monitor.py (Full Code - Latest Version with Gemini AI Integration)
+# pump_monitor.py (Full Code - Latest Version with BUY_SOL_AMOUNT and httpx.AsyncClient)
 
 import asyncio
 import json
 import base64
 import websockets # Core library for WebSocket connections
 import websockets.exceptions 
+# REMOVED: from solana.rpc.websocket_api import connect (replaced by websockets)
+# REMOVED: from solana.rpc.api import Client (replaced by httpx)
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
 import httpx # For general HTTP requests (e.g., to fetch token metadata from URI, or interact with RPC via HTTP)
-import google.generativeai as genai # NEW: Import Google Gemini AI library
+import google.generativeai as genai # Import Google Gemini AI library
 
 from pathlib import Path
 
@@ -22,7 +24,10 @@ WSS_URL = os.getenv("SOLANA_WSS_URL")
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# NEW: Load BUY_SOL_AMOUNT from .env
+BUY_SOL_AMOUNT = float(os.getenv("BUY_SOL_AMOUNT", "0.001")) # Default to 0.001 SOL if not set
 
+# --- Basic Validation of .env variables ---
 if not WSS_URL:
     print("CRITICAL ERROR: SOLANA_WSS_URL not found in .env. Exiting.")
     exit()
@@ -35,14 +40,18 @@ if not PRIVATE_KEY_B58:
 if not GEMINI_API_KEY:
     print("CRITICAL ERROR: GEMINI_API_KEY not found in .env. Exiting.")
     exit()
+if BUY_SOL_AMOUNT <= 0:
+    print("CRITICAL ERROR: BUY_SOL_AMOUNT must be a positive number. Exiting.")
+    exit()
+
 
 # Configure Google Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
 # Initialize the generative model
 gemini_model = genai.GenerativeModel('gemini-pro') # Using gemini-pro for text tasks
 
-# Initialize a generic HTTP client for fetching external data (like token URI content)
-http_client = httpx.Client()
+# Initialize an asynchronous HTTP client for fetching external data
+http_client = httpx.AsyncClient() # Changed to AsyncClient for async operations
 
 
 try:
@@ -103,26 +112,21 @@ async def get_ai_assessment(token_name, token_symbol, token_uri, new_token_mint)
         f"Provide your assessment as a short, concise paragraph (max 100 words), and then state 'Assessment: [Positive/Neutral/Negative]'."
     )
     
-    # You could also try to fetch the URI content here if it's HTTP/S
     uri_content = "URI content not fetched or not applicable."
     if token_uri.startswith("http://") or token_uri.startswith("https://"):
         try:
-            # Use httpx for async HTTP requests
-            async with httpx.AsyncClient() as client:
-                response = await client.get(token_uri, timeout=5) # 5 second timeout
-                response.raise_for_status() # Raise an exception for bad status codes
-                uri_content = response.text[:500] # Take first 500 chars
-                prompt += f"\n\nURI Content (first 500 chars): {uri_content}"
+            response = await http_client.get(token_uri, timeout=5) # Use the global async client
+            response.raise_for_status()
+            uri_content = response.text[:500]
+            prompt += f"\n\nURI Content (first 500 chars): {uri_content}"
         except Exception as e:
             uri_content = f"Failed to fetch URI content: {e}"
             prompt += f"\n\nNote: Failed to fetch URI content for AI analysis: {uri_content}"
     elif token_uri.startswith("ipfs://"):
-        # For IPFS, you'd typically need an IPFS gateway. Not implementing fetching here.
         prompt += f"\n\nNote: IPFS URI detected. Content not automatically fetched for AI analysis."
 
     try:
         print(f"Sending token data to Gemini AI for assessment...")
-        # Use generate_content for simpler text generation
         ai_response = await gemini_model.generate_content_async(prompt)
         assessment_text = ai_response.text
         print(f"AI Assessment Received:\n{assessment_text}")
@@ -131,6 +135,27 @@ async def get_ai_assessment(token_name, token_symbol, token_uri, new_token_mint)
         print(f"Error getting AI assessment: {e}")
         return f"AI assessment failed: {e}"
 
+# --- Placeholder for future buy logic ---
+async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypair: Keypair):
+    """
+    Placeholder function for executing a buy trade on Pump.fun.
+    THIS FUNCTION NEEDS FULL IMPLEMENTATION.
+    """
+    print(f"ACTION: Attempting to buy {sol_amount} SOL worth of {token_mint}...")
+    print("WARNING: Actual trading logic is not yet implemented in this bot!")
+    # Example steps (will require more code):
+    # 1. Fetch current bonding curve state (virtual_sol_reserves, virtual_token_reserves) using RPC.
+    # 2. Calculate token amount to receive and estimated slippage.
+    # 3. Build a Solana transaction with the Pump.fun 'buy' instruction.
+    #    (This involves: program ID, buyer's token account, bonding curve account, global account, etc.)
+    # 4. Sign the transaction with wallet_keypair.
+    # 5. Send the transaction via HTTP_URL RPC.
+    # 6. Monitor transaction confirmation.
+    # For now, we'll just simulate.
+    await asyncio.sleep(2) # Simulate network delay
+    print(f"SIMULATION: Would have bought {sol_amount} SOL worth of {token_mint}. (Trade not executed)")
+    return "SIMULATED_TRADE_SUCCESS"
+
 
 print(f"Connecting to Solana WebSocket at: {WSS_URL}")
 print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
@@ -138,7 +163,7 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 async def pump_fun_listener():
     """
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
-    Integrates Gemini AI for token analysis.
+    Integrates Gemini AI for token analysis and includes a placeholder for buy actions.
     """
     try:
         async with websockets.connect(WSS_URL) as ws:
@@ -147,7 +172,7 @@ async def pump_fun_listener():
                 "id": 1, 
                 "method": "logsSubscribe",
                 "params": [
-                    {"mentions": [PUMPFUN_PROGRAM_ID_STR]}, # Filter by Pump.fun program ID as a string
+                    {"mentions": [PUMPFUN_PROGRAM_ID_STR]},
                     {"commitment": "confirmed"}
                 ]
             }
@@ -157,7 +182,7 @@ async def pump_fun_listener():
 
             try:
                 print(f"Awaiting first response (expecting subscription ID or error from RPC)...")
-                first_response_raw = await ws.recv() # Get raw string
+                first_response_raw = await ws.recv()
                 print(f"Received first response (raw): {first_response_raw}")
 
                 parsed_first_response = json.loads(first_response_raw)
@@ -241,25 +266,29 @@ async def pump_fun_listener():
                                 token_uri = decoded_instruction_args.get("uri", "N/A")
                                 print(f"Token Name: {token_name}, Symbol: {token_symbol}, URI: {token_uri}")
                                 
-                                # --- NEW: Call Gemini AI for assessment ---
+                                # --- Call Gemini AI for assessment ---
                                 ai_assessment = await get_ai_assessment(
                                     token_name, 
                                     token_symbol, 
                                     token_uri, 
                                     new_token_mint
                                 )
-                                print(f"\nAI Assessment Complete for {token_symbol}: {ai_assessment.split('Assessment:')[-1].strip()}") # Print just the assessment part
+                                print(f"\nAI Assessment Complete for {token_symbol}: {ai_assessment.split('Assessment:')[-1].strip()}")
 
                                 # --- Your trading decision logic would go here ---
-                                # Example: if "Positive" in ai_assessment:
-                                #    await execute_buy_trade(new_token_mint, ...)
-                                #    etc.
+                                # This is where you'd decide whether to buy based on AI assessment
+                                if "Positive" in ai_assessment: # Example condition
+                                    print(f"AI assessment for {token_symbol} is Positive. Initiating simulated buy...")
+                                    # Call the placeholder buy function
+                                    await execute_buy_trade(new_token_mint, BUY_SOL_AMOUNT, wallet_keypair)
+                                else:
+                                    print(f"AI assessment for {token_symbol} is not Positive. Skipping buy.")
 
                             else:
                                 print("Warning: Could not reliably extract new token mint or creator address.")
                                 print(f"Account Keys received in log: {account_keys_str}")
 
-                            print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
+                            print(f"Proceeding to AI assessment and potential trading decision for {new_token_mint}!")
 
                         except ValueError as ve:
                             print(f"Error during manual Borsh decoding: {ve}")
