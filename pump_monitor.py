@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version, TOKEN_PROGRAM_ID as Constant Pubkey Fix)
+# pump_monitor.py (Full Code - Latest Version, ATA Derivation Fix)
 
 import asyncio
 import json
@@ -11,8 +11,8 @@ from solders.transaction import Transaction, VersionedTransaction
 from solders.message import MessageV0
 from solders.instruction import Instruction, AccountMeta
 from solders.system_program import ID as SYSTEM_PROGRAM_ID
-# REMOVED: from spl.token.program_id import PROGRAM_ID as TOKEN_PROGRAM_ID # Removed problematic import
-from spl.token.client import get_associated_token_address # This is from solana-py's spl library
+# No more importing TOKEN_PROGRAM_ID (now a constant) or get_associated_token_address (now derived)
+# REMOVED: from spl.token.client import get_associated_token_address # Removed problematic import
 
 from dotenv import load_dotenv
 import os
@@ -79,6 +79,19 @@ PUMPFUN_PROGRAM_ID_STR = str(PUMPFUN_PROGRAM_ID)
 
 # Define TOKEN_PROGRAM_ID as a constant Pubkey
 TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+# Define ASSOCIATED_TOKEN_PROGRAM_ID as a constant Pubkey
+ASSOCIATED_TOKEN_PROGRAM_ID = Pubkey.from_string("ATokenGPvbdGVbGfGSFexuHpHx2MVc5MjS4H2x1tXy6")
+
+# --- NEW: Helper function to derive Associated Token Account (ATA) address ---
+def derive_associated_token_address(owner: Pubkey, mint: Pubkey) -> Pubkey:
+    """
+    Derives the Associated Token Account (ATA) address for a given owner and mint.
+    """
+    return Pubkey.find_program_address(
+        [bytes(owner), bytes(TOKEN_PROGRAM_ID), bytes(mint)],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+    )[0] # [0] because find_program_address returns (pubkey, nonce)
+
 
 # Pump.fun Instruction Discriminators (from pump-fun.json IDL - SHA256 of instruction name)
 BUY_INSTRUCTION_DISCRIMINATOR = bytes([160, 219, 137, 240, 116, 219, 237, 201]) # SHA256 of "global:buy" truncated to 8 bytes
@@ -168,7 +181,8 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
     )
     print(f"Bonding Curve PDA: {bonding_curve_pubkey}")
 
-    user_token_account_pubkey = get_associated_token_address(wallet_keypair.pubkey(), token_mint)
+    # Use our custom derivation function
+    user_token_account_pubkey = derive_associated_token_address(wallet_keypair.pubkey(), token_mint)
     print(f"User ATA for new token: {user_token_account_pubkey}")
 
     global_seed = b"global"
@@ -209,7 +223,7 @@ async def execute_buy_trade(token_mint: Pubkey, sol_amount: float, wallet_keypai
         AccountMeta(pubkey=Pubkey.from_string("SysvarRent111111111111111111111111111111111"), is_signer=False, is_writable=False), # 7. rent (sysvar)
         AccountMeta(pubkey=SYSTEM_PROGRAM_ID, is_signer=False, is_writable=False), # 8. system_program
         AccountMeta(pubkey=TOKEN_PROGRAM_ID, is_signer=False, is_writable=False), # 9. token_program
-        AccountMeta(pubkey=Pubkey.from_string("ATokenGPvbdGVbGfGSFexuHpHx2MVc5MjS4H2x1tXy6"), is_signer=False, is_writable=False), # 10. associated_token_program
+        AccountMeta(pubkey=ASSOCIATED_TOKEN_PROGRAM_ID, is_signer=False, is_writable=False), # 10. associated_token_program
     ]
 
     buy_instruction = Instruction(
