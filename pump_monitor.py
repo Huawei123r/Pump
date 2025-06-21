@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with Syntax Error Fix - Version 2)
+# pump_monitor.py (Full Code - Latest Version, MessageV0 Import Fix - Version 2)
 
 import asyncio
 import json
@@ -7,7 +7,10 @@ import websockets # Core library for WebSocket connections
 import websockets.exceptions 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
-from solders.transaction import Transaction, VersionedTransaction, MessageV0
+# CORRECTED: Import Transaction and VersionedTransaction from solders.transaction
+from solders.transaction import Transaction, VersionedTransaction
+# CORRECTED: Import MessageV0 separately from solders.message
+from solders.message import MessageV0
 from solders.instruction import Instruction, AccountMeta
 from solders.system_program import ID as SYSTEM_PROGRAM_ID
 from solders.token.program import ID as TOKEN_PROGRAM_ID
@@ -16,8 +19,8 @@ from spl.token.client import get_associated_token_address # This is from solana-
 from dotenv import load_dotenv
 import os
 import borsh
-import httpx # For general HTTP requests (e.g., to fetch token metadata from URI)
-import google.generativeai as genai # Import Google Gemini AI library
+import httpx 
+import google.generativeai as genai
 from solana.rpc.api import Client as SolanaRpcClient
 from solana.rpc.commitment import Confirmed
 from solana.rpc.types import TxOpts 
@@ -272,7 +275,6 @@ async def pump_fun_listener():
     Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
     Integrates Gemini AI for token analysis and includes a placeholder for buy actions.
     """
-    # Consolidate all connection-related errors into one try-except block
     try:
         async with websockets.connect(WSS_URL) as ws:
             subscribe_request = {
