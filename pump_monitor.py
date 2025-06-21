@@ -1,13 +1,12 @@
-# pump_monitor.py (Full Code - Latest Version with IDL Debugging)
+# pump_monitor.py (Full Code - Latest Version with IDL Patching)
 
 import asyncio
 import json
 import base64
-# Corrected import for WebSocket connection for solana-py >= 0.29.x
 from solana.rpc.websocket_api import connect
-from solana.rpc.api import Client # For HTTP requests (e.g., getting balance, sending transactions)
+from solana.rpc.api import Client
 from solders.pubkey import Pubkey
-from solders.keypair import Keypair # For handling your private key
+from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 from anchorpy import Program, Idl
@@ -17,13 +16,9 @@ from pathlib import Path
 load_dotenv()
 
 # --- Configuration ---
-# Now load the WSS_URL from your .env file
 WSS_URL = os.getenv("SOLANA_WSS_URL")
-# Also load HTTP_URL for standard requests (will be used later for sending transactions)
 HTTP_URL = os.getenv("SOLANA_HTTP_URL")
-# Load your private key (WARNING: INSECURE FOR REAL FUNDS, USE BURNER WALLET ONLY)
 PRIVATE_KEY_B58 = os.getenv("SOLANA_PRIVATE_KEY")
-# Load Gemini API Key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- Basic Validation of .env variables ---
@@ -41,12 +36,11 @@ if not GEMINI_API_KEY:
     exit()
 
 
-# Initialize Solana RPC Client (for HTTP requests like getting account info)
+# Initialize Solana RPC Client (for HTTP requests)
 http_client = Client(HTTP_URL)
 
 # Initialize your wallet keypair from the private key
 try:
-    # Keypair.from_base58_string expects a Base58 encoded string
     wallet_keypair = Keypair.from_base58_string(PRIVATE_KEY_B58)
     print(f"Wallet Public Key: {wallet_keypair.pubkey()}")
 except Exception as e:
@@ -55,47 +49,67 @@ except Exception as e:
     exit()
 
 
-# Pump.fun program ID (remains constant)
+# Pump.fun program ID
 PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
 
-# --- Load Pump.fun IDL ---
+# --- Load and Patch Pump.fun IDL ---
 try:
-    # *** MODIFICATION HERE: Using "pump-fun.json" as per your file system ***
     with Path("pump-fun.json").open() as f:
-        raw_idl = f.read()
-
-    # --- TEMPORARY DEBUGGING CODE ---
-    # Parse the raw JSON string to a Python dict to inspect it
-    temp_idl_dict = json.loads(raw_idl)
+        raw_idl_content = f.read()
     
-    # Try to extract the 'create' instruction's accounts
-    create_instruction_accounts = None
-    for instr in temp_idl_dict.get('instructions', []):
-        if instr.get('name') == 'create':
-            create_instruction_accounts = instr.get('accounts')
-            break
+    # Parse the raw JSON string into a Python dictionary
+    idl_dict_to_patch = json.loads(raw_idl_content)
+
+    # --- PATCHING LOGIC STARTS HERE ---
+    # Iterate through all instructions and their accounts to add missing 'isMut' and 'isSigner'
+    for instruction in idl_dict_to_patch.get('instructions', []):
+        for account in instruction.get('accounts', []):
+            # Check if 'isMut' or 'isSigner' are missing AND it's not a 'pda' or 'address' type that implies them
+            # For PDA accounts or fixed address accounts, isMut and isSigner might be inferred or not needed if only for reference.
+            # But the error implies anchorpy wants them explicitly for all 'IdlAccountItem' variants.
+            # Safest to add them as False by default if they are missing, then let explicit definitions override.
+
+            # We need to be careful not to overwrite existing correct values
+            if 'isMut' not in account and 'writable' in account:
+                account['isMut'] = account['writable'] # If 'writable' exists, use it
+            elif 'isMut' not in account:
+                account['isMut'] = False # Default to false if not specified
+
+            if 'isSigner' not in account and 'signer' in account:
+                account['isSigner'] = account['signer'] # If 'signer' exists, use it
+            elif 'isSigner' not in account:
+                account['isSigner'] = False # Default to false if not specified
             
-    if create_instruction_accounts:
-        print("\n--- DEBUG: 'create' instruction accounts from raw_idl ---")
-        # Print the first few accounts from the 'create' instruction
-        for i, account in enumerate(create_instruction_accounts[:5]): # Print first 5 accounts
-            print(f"Account {i}: {json.dumps(account, indent=2)}")
-        print("--- END DEBUG ---\n")
-    else:
-        print("\n--- DEBUG: 'create' instruction not found in IDL or no accounts ---")
-    # --- END TEMPORARY DEBUGGING CODE ---
+            # Additional check for legacy IDL structures where 'writable'/'signer' might be absent too
+            if 'writable' not in account and 'isMut' not in account:
+                 account['isMut'] = False # Ensure isMut is set
+            if 'signer' not in account and 'isSigner' not in account:
+                 account['isSigner'] = False # Ensure isSigner is set
 
+    # Some older IDLs also define 'accounts' at the top level outside of instructions.
+    # While less common, this could also cause an issue if anchorpy tries to parse them
+    # as IdlAccountItem. The error message 'line 33' points to instruction accounts though.
+    # For safety, let's also patch global accounts if present:
+    for global_account_def in idl_dict_to_patch.get('accounts', []):
+        if 'isMut' not in global_account_def:
+            global_account_def['isMut'] = False
+        if 'isSigner' not in global_account_def:
+            global_account_def['isSigner'] = False
 
-    pump_fun_idl = Idl.from_json(raw_idl) # This line will still cause the error if the IDL is bad
-    print("Pump.fun IDL loaded successfully for decoding.")
+    # Convert the patched dictionary back to an Idl object
+    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch)) # Convert dict back to JSON string
+    pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
+    print("Pump.fun IDL loaded and patched successfully for decoding.")
 except FileNotFoundError:
     print("CRITICAL ERROR: pump-fun.json not found.")
     print("Please ensure 'pump-fun.json' is in the same directory as this script.")
-    print("You downloaded it from: https://raw.githubusercontent.com/rckprtr/pumpdotfun-sdk/main/src/IDL/pump-fun.json (click Raw and save)")
+    print("Download from: https://raw.githubusercontent.com/rckprtr/pumpdotfun-sdk/main/src/IDL/pump-fun.json (click Raw and save)")
     exit()
 except Exception as e:
-    print(f"CRITICAL ERROR: Error loading or parsing Pump.fun IDL: {e}")
+    print(f"CRITICAL ERROR: Error loading, patching, or parsing Pump.fun IDL: {e}")
+    # Print the problematic dictionary content for extreme debugging if needed
+    # print(json.dumps(idl_dict_to_patch, indent=2))
     exit()
 
 
@@ -106,21 +120,14 @@ async def pump_fun_listener():
     """
     Listens for new token creations on Pump.fun via Solana WebSocket and decodes their data.
     """
-    # Use the 'connect' function from solana.rpc.websocket_api
     async with connect(WSS_URL) as ws:
-        # First, subscribe to the logs.
-        # The logs_subscribe method returns a subscription ID in the first response.
-        # We need to receive that response to get the ID.
         await ws.logs_subscribe(
             filter_by_mention=PUMPFUN_PROGRAM_ID,
-            commitment="confirmed" # 'confirmed' commitment balances speed with reliability
+            commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
 
-        # The first message received after subscribing contains the subscription ID
-        # This is part of the WebSocket handshake for subscriptions
         first_response = await ws.recv()
-        # Verify the structure to safely extract the subscription ID
         if isinstance(first_response, list) and len(first_response) > 0 and hasattr(first_response[0], 'result'):
             subscription_id = first_response[0].result
             print(f"Successfully subscribed with ID: {subscription_id}")
@@ -128,61 +135,41 @@ async def pump_fun_listener():
             print(f"Warning: Could not get subscription ID from first response: {first_response}")
 
 
-        # Now, continuously receive messages from the WebSocket
-        async for msg_list in ws: # ws yields a list of messages
-            # Each message in msg_list could be a notification or a keep-alive
+        async for msg_list in ws:
             for msg in msg_list:
-                # Check if it's a log notification with relevant data
                 if 'params' in msg and 'result' in msg['params'] and 'value' in msg['params']['result']:
                     log_data = msg['params']['result'].get('value', {})
                     signature = log_data.get('signature')
                     logs = log_data.get('logs', [])
 
                     is_new_token_creation = False
-                    program_data_log_content = None # Store the content for decoding
+                    program_data_log_content = None
 
-                    # Iterate through logs to find the "Instruction: Create" and subsequent "Program data:"
                     for i, log_line in enumerate(logs):
                         if "Program log: Instruction: Create" in log_line:
                             is_new_token_creation = True
-                            # The 'Program data:' log is usually right after the 'Instruction: Create'
                             if i + 1 < len(logs) and "Program data: " in logs[i+1]:
                                 program_data_log_content = logs[i+1].replace("Program data: ", "")
-                            break # Found the create instruction, no need to check further logs for this transaction
+                            break
 
                     if is_new_token_creation and program_data_log_content:
                         print(f"\n--- Detected Potential New Pump.fun Token Creation ---")
                         print(f"Transaction Signature: {signature}")
-                        # print(f"Raw Instruction Log: {log_line}") # Can uncomment for debugging
-                        print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...") # Print first 100 chars
+                        print(f"Raw Program Data Log Content: {program_data_log_content[:100]}...")
 
                         try:
-                            # Decode the base64 data to bytes
                             decoded_bytes = base64.b64decode(program_data_log_content)
-
-                            # Use anchorpy's instruction coder to decode the instruction data
                             decoded_instruction = pump_program_decoder.coder.instruction.decode(decoded_bytes)
                             
                             if decoded_instruction and decoded_instruction.name == 'create':
                                 print(f"Decoded Instruction Name: {decoded_instruction.name}")
-                                # The 'data' attribute here refers to the instruction arguments
                                 print(f"Decoded Instruction Data (Args): {decoded_instruction.data}")
                                 
-                                # --- IMPORTANT: EXTRACTING MINT AND CREATOR ADDRESSES ---
-                                # The `accountKeys` array in the `log_data` contains the public keys
-                                # involved in the transaction. We need to map these to the 'mint'
-                                # and 'user' (creator) accounts as defined in the Pump.fun IDL
-                                # for the 'create' instruction.
-                                # Based on the pump-fun.json IDL 'create' instruction's `accounts` array:
-                                # The 'mint' account is usually the first Pubkey in the `accountKeys` list (index 0).
-                                # The 'user' (creator) account is usually the fifth Pubkey (index 4).
-
-                                account_keys_str = log_data.get('accountKeys', []) # List of base58 encoded pubkeys
+                                account_keys_str = log_data.get('accountKeys', [])
                                 
                                 new_token_mint = None
                                 creator_address = None
 
-                                # Safely extract based on expected indices from IDL
                                 if len(account_keys_str) > 0:
                                     new_token_mint = Pubkey.from_string(account_keys_str[0])
                                 if len(account_keys_str) > 4:
@@ -191,8 +178,6 @@ async def pump_fun_listener():
                                 if new_token_mint and creator_address:
                                     print(f"**Extracted New Token Mint:** {new_token_mint}")
                                     print(f"**Extracted Creator Address:** {creator_address}")
-
-                                    # You can also get other data from decoded_instruction.data, e.g.:
                                     token_name = decoded_instruction.data.name
                                     token_symbol = decoded_instruction.data.symbol
                                     token_uri = decoded_instruction.data.uri
@@ -201,15 +186,6 @@ async def pump_fun_listener():
                                 else:
                                     print("Warning: Could not reliably extract new token mint or creator address from accountKeys.")
                                     print(f"Account Keys received in log: {account_keys_str}")
-
-                                # --- NEXT MAJOR STEPS after successful token detection and data extraction ---
-                                # 1. Fetch more on-chain data using http_client (e.g., current liquidity, total supply, current holder count)
-                                #    (e.g., `http_client.get_token_supply(new_token_mint)`, `http_client.get_token_largest_accounts(new_token_mint)`)
-                                # 2. Pass this collected data along with token name/symbol to your Gemini AI for classification.
-                                # 3. Implement trading logic: If AI approves, and other criteria (like bonding curve progress,
-                                #    initial holder count, etc. which need to be fetched/monitored) are met, execute a buy trade.
-                                #    This will involve using your `wallet_keypair` and `http_client` to send a transaction.
-                                # 4. Implement selling logic based on your basic strategy (e.g., fixed profit/loss).
 
                                 print(f"Proceeding to AI assessment and trading decision for {new_token_mint}!")
 
