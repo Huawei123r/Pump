@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version, MessageV0 Import Fix - Version 2)
+# pump_monitor.py (Full Code - Latest Version, TOKEN_PROGRAM_ID Import Fix)
 
 import asyncio
 import json
@@ -7,13 +7,12 @@ import websockets # Core library for WebSocket connections
 import websockets.exceptions 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
-# CORRECTED: Import Transaction and VersionedTransaction from solders.transaction
 from solders.transaction import Transaction, VersionedTransaction
-# CORRECTED: Import MessageV0 separately from solders.message
 from solders.message import MessageV0
 from solders.instruction import Instruction, AccountMeta
 from solders.system_program import ID as SYSTEM_PROGRAM_ID
-from solders.token.program import ID as TOKEN_PROGRAM_ID
+# CORRECTED: Import TOKEN_PROGRAM_ID from spl.token.program_id
+from spl.token.program_id import PROGRAM_ID as TOKEN_PROGRAM_ID # Corrected import path for TOKEN_PROGRAM_ID
 from spl.token.client import get_associated_token_address # This is from solana-py's spl library
 
 from dotenv import load_dotenv
