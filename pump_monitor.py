@@ -1,17 +1,17 @@
-# pump_monitor.py (Full Code - Latest Version with Deep WebSocket Error Debugging)
+# pump_monitor.py (Full Code - Latest Version with Raw Websockets Connection)
 
 import asyncio
 import json
 import base64
-from solana.rpc.websocket_api import connect
-from solana.rpc.api import Client
+# REMOVED: from solana.rpc.websocket_api import connect
+# REMOVED: from solana.rpc.api import Client # We might need a direct httpx client later for RPC, but not for WS
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# We'll use the raw websockets library for more direct error info if needed
-import websockets.exceptions 
+import websockets # NEW: Import the raw websockets library
+import websockets.exceptions # For more specific error handling
 
 from pathlib import Path
 
@@ -19,8 +19,7 @@ from pathlib import Path
 load_dotenv()
 
 # TEMPORARILY SWITCH TO PUBLIC DEVNET FOR CONNECTION DEBUGGING
-# If this works, the issue is with your Alchemy Mainnet URL or its access from your server.
-# If this also fails, the issue is more fundamental to your server's network or Python websockets setup.
+# Keep using Devnet until we confirm basic WebSocket connectivity.
 WSS_URL = "wss://api.devnet.solana.com/" 
 HTTP_URL = "https://api.devnet.solana.com/" # Corresponding HTTP for Devnet
 
@@ -45,7 +44,9 @@ if not GEMINI_API_KEY:
     exit()
 
 
-http_client = Client(HTTP_URL)
+# We will re-add a direct HTTP client if needed for RPC calls later,
+# but for now, focus on the WebSocket connection.
+# http_client = Client(HTTP_URL) # Commented out as Client is from solana.rpc.api
 
 try:
     wallet_keypair = Keypair.from_base58_string(PRIVATE_KEY_B58)
@@ -97,10 +98,12 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     """
-    Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request.
+    Listens for logs on Solana Mainnet by sending a raw JSON-RPC WebSocket subscribe request
+    using the core 'websockets' library.
     """
     try:
-        async with connect(WSS_URL) as ws:
+        # --- NEW: Use raw websockets.connect ---
+        async with websockets.connect(WSS_URL) as ws:
             subscribe_request = {
                 "jsonrpc": "2.0",
                 "id": 1, # A unique ID for your subscription
@@ -114,10 +117,9 @@ async def pump_fun_listener():
             await ws.send(json.dumps(subscribe_request))
             print(f"Sent subscription request: {json.dumps(subscribe_request)}")
 
-            # --- DEEPER DEBUGGING: Catch specific websockets exceptions ---
             try:
-                print(f"Awaiting first response (expecting subscription ID)...")
-                first_response_raw = await ws.recv() # Get raw string
+                print(f"Awaiting first response (expecting subscription ID or error from RPC)...")
+                first_response_raw = await ws.recv() # Get raw string message
                 print(f"Received first response (raw): {first_response_raw}")
 
                 parsed_first_response = json.loads(first_response_raw)
@@ -125,7 +127,6 @@ async def pump_fun_listener():
                     subscription_id = parsed_first_response['result']
                     print(f"Successfully subscribed with ID: {subscription_id}")
                 elif 'error' in parsed_first_response:
-                    # If the RPC returns an error in the response
                     print(f"ERROR: RPC returned an error in first response: {parsed_first_response['error']}")
                     raise Exception(f"RPC Error: {parsed_first_response['error']}")
                 else:
