@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with RpcTransactionLogsFilter Import Fix)
+# pump_monitor.py (Full Code - Latest Version with RpcTransactionLogsFilter Constructor Fix)
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# NEW: Import the precise RpcTransactionLogsFilter enum from solders.rpc.config
+# Import the precise RpcTransactionLogsFilter enum from solders.rpc.config
 from solders.rpc.config import RpcTransactionLogsFilter 
 
 from pathlib import Path
@@ -92,9 +92,9 @@ async def pump_fun_listener():
     Listens for logs on Solana Mainnet using the precise RpcTransactionLogsFilter.
     """
     async with connect(WSS_URL) as ws:
-        # --- NEW: Use RpcTransactionLogsFilter.Mentions with the Pubkey ---
+        # --- NEW: Use RpcTransactionLogsFilter constructor with 'mentions' argument ---
         await ws.logs_subscribe(
-            filter_=RpcTransactionLogsFilter.Mentions([PUMPFUN_PROGRAM_ID]), # Pass Pubkey object directly
+            filter_=RpcTransactionLogsFilter(mentions=[PUMPFUN_PROGRAM_ID]), # Pass Pubkey object directly
             commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
