@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with RpcLogsFilter Import Fix)
+# pump_monitor.py (Full Code - Latest Version with logs_subscribe Dictionary Filter Fix)
 
 import asyncio
 import json
@@ -10,8 +10,8 @@ from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
 import borsh
-# CORRECTED: Import RpcLogsFilter from its new location
-from solders.rpc.config import RpcLogsFilter # Or it might be from solders.rpc.filter in some versions
+# REMOVED: from solders.rpc.config import RpcLogsFilter # No longer needed
+
 from pathlib import Path
 
 # --- Configuration ---
@@ -87,9 +87,9 @@ print(f"Monitoring Pump.fun Program ID: {PUMPFUN_PROGRAM_ID}")
 
 async def pump_fun_listener():
     async with connect(WSS_URL) as ws:
-        # Use the correctly imported RpcLogsFilter
+        # --- NEW: Corrected logs_subscribe syntax - pass a dictionary directly ---
         await ws.logs_subscribe(
-            filter_=RpcLogsFilter.Mentions([str(PUMPFUN_PROGRAM_ID)]),
+            filter_={"mentions": [str(PUMPFUN_PROGRAM_ID)]}, # Pass a dictionary for mentions filter
             commitment="confirmed"
         )
         print("Subscribed to Pump.fun program logs. Waiting for new token creations on Mainnet...")
