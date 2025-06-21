@@ -1,4 +1,4 @@
-# pump_monitor.py (Full Code - Latest Version with IDL Patching)
+# pump_monitor.py (Full Code - Latest Version with DEEP IDL Debugging)
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from dotenv import load_dotenv
 import os
-from anchorpy import Program, Idl
+from anchorpy import Program, Idl # Keep Idl import for now to see where it breaks
 from pathlib import Path
 
 # Load environment variables from .env file
@@ -54,6 +54,7 @@ PUMPFUN_PROGRAM_ID = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBE
 
 
 # --- Load and Patch Pump.fun IDL ---
+idl_dict_to_patch = None # Initialize outside try for debugging
 try:
     with Path("pump-fun.json").open() as f:
         raw_idl_content = f.read()
@@ -61,44 +62,43 @@ try:
     # Parse the raw JSON string into a Python dictionary
     idl_dict_to_patch = json.loads(raw_idl_content)
 
-    # --- PATCHING LOGIC STARTS HERE ---
+    # --- PATCHING LOGIC ---
     # Iterate through all instructions and their accounts to add missing 'isMut' and 'isSigner'
     for instruction in idl_dict_to_patch.get('instructions', []):
         for account in instruction.get('accounts', []):
-            # Check if 'isMut' or 'isSigner' are missing AND it's not a 'pda' or 'address' type that implies them
-            # For PDA accounts or fixed address accounts, isMut and isSigner might be inferred or not needed if only for reference.
-            # But the error implies anchorpy wants them explicitly for all 'IdlAccountItem' variants.
-            # Safest to add them as False by default if they are missing, then let explicit definitions override.
+            # If 'writable' or 'signer' keys exist, propagate them to 'isMut'/'isSigner'
+            if 'writable' in account:
+                account['isMut'] = account['writable']
+            elif 'isMut' not in account: # If 'isMut' is still not set, default to False
+                account['isMut'] = False
 
-            # We need to be careful not to overwrite existing correct values
-            if 'isMut' not in account and 'writable' in account:
-                account['isMut'] = account['writable'] # If 'writable' exists, use it
-            elif 'isMut' not in account:
-                account['isMut'] = False # Default to false if not specified
-
-            if 'isSigner' not in account and 'signer' in account:
-                account['isSigner'] = account['signer'] # If 'signer' exists, use it
-            elif 'isSigner' not in account:
-                account['isSigner'] = False # Default to false if not specified
+            if 'signer' in account:
+                account['isSigner'] = account['signer']
+            elif 'isSigner' not in account: # If 'isSigner' is still not set, default to False
+                account['isSigner'] = False
             
-            # Additional check for legacy IDL structures where 'writable'/'signer' might be absent too
-            if 'writable' not in account and 'isMut' not in account:
-                 account['isMut'] = False # Ensure isMut is set
-            if 'signer' not in account and 'isSigner' not in account:
-                 account['isSigner'] = False # Ensure isSigner is set
+            # Ensure these keys are always present even if they were never defined
+            if 'isMut' not in account:
+                account['isMut'] = False
+            if 'isSigner' not in account:
+                account['isSigner'] = False
 
-    # Some older IDLs also define 'accounts' at the top level outside of instructions.
-    # While less common, this could also cause an issue if anchorpy tries to parse them
-    # as IdlAccountItem. The error message 'line 33' points to instruction accounts though.
-    # For safety, let's also patch global accounts if present:
+    # Patch top-level accounts definition too, if any exist and are missing flags
     for global_account_def in idl_dict_to_patch.get('accounts', []):
         if 'isMut' not in global_account_def:
             global_account_def['isMut'] = False
         if 'isSigner' not in global_account_def:
             global_account_def['isSigner'] = False
+    # --- END PATCHING LOGIC ---
+
+    # --- DEEP DEBUGGING: Print the entire patched IDL dictionary before Idl.from_json ---
+    print("\n--- DEEP DEBUG: Full Patched IDL Dictionary (before Idl.from_json) ---")
+    print(json.dumps(idl_dict_to_patch, indent=2))
+    print("--- END DEEP DEBUG ---\n")
 
     # Convert the patched dictionary back to an Idl object
-    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch)) # Convert dict back to JSON string
+    # This is the line that's currently throwing the error
+    pump_fun_idl = Idl.from_json(json.dumps(idl_dict_to_patch))
     pump_program_decoder = Program(pump_fun_idl, PUMPFUN_PROGRAM_ID)
     print("Pump.fun IDL loaded and patched successfully for decoding.")
 except FileNotFoundError:
@@ -108,8 +108,11 @@ except FileNotFoundError:
     exit()
 except Exception as e:
     print(f"CRITICAL ERROR: Error loading, patching, or parsing Pump.fun IDL: {e}")
-    # Print the problematic dictionary content for extreme debugging if needed
-    # print(json.dumps(idl_dict_to_patch, indent=2))
+    # If it fails here, the idl_dict_to_patch *should* contain the problematic structure
+    if idl_dict_to_patch:
+        print("\n--- DEBUG: Problematic IDL Dictionary content (partial, if available) ---")
+        print(json.dumps(idl_dict_to_patch, indent=2)[:2000]) # Print first 2000 chars for context
+        print("--- END DEBUG ---\n")
     exit()
 
 
